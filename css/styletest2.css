@@ -1,0 +1,143 @@
+/* 1. COLOURS (taken from our inspiration board) */
+:root {
+  --ink: #1f090b;     /* near-black */
+  --cream: #f5d4a8;
+  --org: #ea7720;     /* orange: accents and buttons */
+  --brn: #571c0a;     /* dark brown */
+  --slate: #436066;   /* blue-grey: shadows */
+
+  /* colours that change between dark and light mode */
+  --bg: var(--ink);
+  --fg: var(--cream);
+  --card: var(--brn);
+  --cfg: var(--cream);
+  --mut: #d9b98a;
+
+  box-sizing: border-box;
+  /* keep content away from phone notches */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: var(--cream); --fg: var(--ink); --card: #f8ebd0; --cfg: var(--ink); --mut: var(--brn); }
+}
+
+/* 2. BASE */
+*, *::before, *::after { box-sizing: inherit; }
+html { background: var(--bg); scroll-snap-type: y proximity; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: Cairo, system-ui, sans-serif; }
+[hidden] { display: none !important; }
+
+h1, h2, h3 { font-family: Kufam, Georgia, serif; font-weight: 700; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(34px, 7.5vw, 68px); }
+h1 em { font-style: normal; color: var(--org); }
+h2 { font-size: clamp(28px, 5vw, 44px); }
+.lead { font-size: clamp(17px, 2.4vw, 22px); max-width: 36ch; margin: 0; color: var(--mut); }
+
+/* each screen fills the phone or window height */
+section {
+  min-height: 100svh;
+  scroll-snap-align: start;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px; padding: 40px 20px; text-align: center;
+}
+
+/* woven divider between screens */
+.strip {
+  height: 18px;
+  background: var(--brn) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='18'%3E%3Cpath d='M18 2l8 7-8 7-8-7z' fill='%23ea7720'/%3E%3Crect y='7' width='4' height='4' fill='%23436066'/%3E%3Crect x='32' y='7' width='4' height='4' fill='%23436066'/%3E%3C/svg%3E") repeat-x center;
+}
+
+/* 3. PAGE 1: welcome */
+.hero { flex-direction: row; flex-wrap: wrap; gap: 36px 56px; }
+.hero-text { display: flex; flex-direction: column; gap: 18px; align-items: flex-start; text-align: left; max-width: 520px; }
+.pics { display: flex; gap: 16px; align-items: flex-end; }
+.pics img { display: block; border: 4px solid var(--org); border-radius: 6px; box-shadow: 8px 8px 0 var(--slate); height: min(300px, 34svh); width: auto; }
+.pics img + img { height: min(230px, 26svh); }
+
+/* 4. PAGE 2: tool cards */
+.opts { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; }
+.opt {
+  font: inherit; cursor: pointer; width: 230px;
+  background: var(--card); color: var(--cfg);
+  border: 3px solid var(--org); border-radius: 6px; padding: 22px 16px;
+  box-shadow: 8px 8px 0 var(--slate); transition: transform .15s;
+}
+.opt:hover, .opt:focus-visible { transform: translate(-3px, -3px); outline: none; }
+.opt svg { width: 56px; height: 56px; color: var(--org); fill: none; stroke: currentColor; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.opt b { display: block; font-family: Kufam, serif; font-size: 21px; margin: 8px 0 2px; }
+.opt span { color: var(--mut); font-size: 15px; }
+
+/* 5. SHARED BY PAGES 3, 4 AND 5 */
+.notool { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.with-tool { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
+.card {
+  background: var(--card); color: var(--cfg);
+  border: 3px solid var(--org); border-radius: 6px; padding: 14px 18px;
+  max-width: 560px; width: 100%; box-shadow: 6px 6px 0 var(--slate);
+}
+.card h3 { font-size: 24px; color: var(--org); margin-bottom: 4px; }
+.card p { margin: 0; font-size: 16px; color: var(--mut); }
+
+.wrap { position: relative; overflow: hidden; border: 4px solid var(--org); border-radius: 4px; margin: 0 auto; box-shadow: 8px 8px 0 var(--slate); background: var(--card); }
+canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+/* the glowing frame that slides over the canvas */
+.win {
+  position: absolute; pointer-events: none;
+  outline: 3px solid var(--cream);
+  box-shadow: 0 0 0 3px var(--ink), 0 0 16px 4px var(--org);
+}
+/* on the result canvas the frame covers only one tile */
+.win.one { outline-width: 2px; box-shadow: 0 0 0 2px var(--ink), 0 0 12px 3px var(--org); }
+
+.steps { display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; font-size: 15px; color: var(--mut); max-width: 560px; }
+.fin { min-height: 52px; font-size: 18px; max-width: 46ch; margin: 0; }
+.note { margin: 0; min-height: 20px; font-size: 14px; color: var(--mut); max-width: 46ch; }
+
+/* 6. PAGE 3: tile by tile */
+.pair { display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap; }
+.pair figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.pair figcaption { font-size: 14px; color: var(--mut); }
+.arrow { font-size: 34px; color: var(--org); }
+.count { margin: 0; min-height: 26px; font-size: 17px; font-weight: 600; max-width: 52ch; }
+
+/* 7. PAGE 4: why it works */
+.how { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; align-items: flex-start; }
+.how figure { margin: 0; width: 210px; display: flex; flex-direction: column; align-items: center; }
+.how h3 { font-size: 20px; color: var(--org); display: flex; align-items: center; gap: 8px; justify-content: center; }
+.how figcaption { margin-top: 10px; font-size: 14px; line-height: 1.35; color: var(--mut); }
+.num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--org); color: var(--ink); font-size: 16px; font-family: Cairo, sans-serif; }
+.op { align-self: center; font-family: Kufam, serif; font-size: 30px; font-weight: 700; color: var(--org); }
+
+.g3 { display: grid; grid-template-columns: repeat(3, 52px); gap: 4px; justify-content: center; margin-top: 12px; }
+.g3 button { width: 52px; height: 52px; padding: 0; border: 0; border-radius: 4px; cursor: pointer; }
+.g3 button:hover { filter: brightness(1.15); }
+.g3 button:focus-visible { outline: 3px solid var(--slate); outline-offset: 2px; }
+.g3 button.mid { box-shadow: inset 0 0 0 3px var(--cream), inset 0 0 0 5px var(--ink); }
+
+/* a cup: the more filled, the more that tile counts */
+.cup { position: relative; display: block; width: 52px; height: 52px; border: 3px solid var(--cfg); border-top: 0; border-radius: 0 0 12px 12px; overflow: hidden; }
+.cup i { position: absolute; left: 0; right: 0; bottom: 0; display: block; }
+.cup.add i { background: var(--org); }
+.cup.take i { background: repeating-linear-gradient(45deg, var(--slate) 0 5px, transparent 5px 9px); box-shadow: inset 0 0 0 2px var(--slate); }
+.cup.none { border-style: dashed; opacity: .5; }
+
+.out { width: 108px; height: 108px; margin-top: 12px; border-radius: 4px; border: 3px solid var(--org); box-shadow: 6px 6px 0 var(--slate); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: center; font-size: 15px; color: var(--mut); }
+.sw { display: inline-block; width: 16px; height: 16px; vertical-align: -2px; margin-right: 4px; border: 2px solid var(--cfg); border-top: 0; border-radius: 0 0 5px 5px; }
+.sw.add { background: var(--org); }
+.sw.take { background: repeating-linear-gradient(45deg, var(--slate) 0 3px, transparent 3px 6px); }
+.sw.none { border-style: dashed; opacity: .5; }
+
+#dWhy { color: var(--cfg); font-size: 17px; text-align: left; }
+
+/* 8. BUTTONS */
+.row { display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: center; }
+.btn { font: inherit; cursor: pointer; border-radius: 4px; padding: 8px 16px; border: 3px solid var(--org); background: transparent; color: var(--fg); user-select: none; touch-action: none; }
+.btn.go, .btn[aria-pressed="true"] { background: var(--org); color: var(--ink); font-weight: 600; }
+.btn.big { padding: 12px 30px; font-size: 20px; box-shadow: 5px 5px 0 var(--slate); }
+.btn.big:active { transform: translate(2px, 2px); box-shadow: 3px 3px 0 var(--slate); }
+.btn.sm { padding: 5px 12px; font-size: 15px; border-width: 2px; }
+.btn:disabled { opacity: .4; cursor: default; box-shadow: none; }
+.btn:focus-visible { outline: 3px solid var(--slate); outline-offset: 2px; }
