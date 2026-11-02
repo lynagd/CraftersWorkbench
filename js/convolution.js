@@ -1,5 +1,4 @@
-// js/convolution.js
-// The engine: applies a 3x3 kernel to an image. No screen code, only maths.
+// The engine: applies a 3x3 kernel to an image.
 
 const Convolution = (() => {
   // Edge Chalk colours (values 0 to 1): flat areas stay INK, borders turn CREAM

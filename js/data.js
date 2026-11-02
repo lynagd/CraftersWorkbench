@@ -1,4 +1,3 @@
-// js/data.js
 // The two canvases (Moroccan mosaic and Persian rug), reduced to grids of coloured tiles.
 // Each pattern has the same shape the engine expects: { cols, rows, pixels }.
 // Generated from the original pictures: each tile is the average colour of its area.
