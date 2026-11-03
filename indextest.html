@@ -101,7 +101,7 @@
   <section id="detail" hidden>
     <div class="with-tool" hidden>
       <h2>How the <span data-tname></span> decides</h2>
-      <p class="lead">We look at one tile, step by step. Tap a tile to change its colour and watch the middle one react.</p>
+      <p class="lead">We look at one tile. Drag each cup onto the empty tile and watch it pour. You can pour them in any order: the final colour is always the same.</p>
 
       <div class="how">
         <figure>
@@ -109,28 +109,30 @@
           <div class="g3" id="dTiles"></div>
           <figcaption>The 9 tiles under the glowing frame. The middle one is the one that will change.</figcaption>
         </figure>
-        <span class="op" aria-hidden="true">+</span>
+        <span class="op" aria-hidden="true">➜</span>
         <figure>
           <h3><span class="num">2</span> Give each a say</h3>
           <div class="g3" id="dCups"></div>
-          <figcaption>The tool decides how much each tile counts.</figcaption>
+          <figcaption>One cup per tile. The fuller the cup, the more that tile counts. Drag a cup onto the empty tile.</figcaption>
         </figure>
         <span class="op" aria-hidden="true">➜</span>
         <figure>
-          <h3><span class="num">3</span> Mix</h3>
-          <div class="out" id="dOut"></div>
-          <figcaption>Everything is poured into the middle tile. This is its new colour.</figcaption>
+          <h3><span class="num">3</span> Pour</h3>
+          <div class="out empty" id="dOut"></div>
+          <p class="count" id="dCount" aria-live="polite"></p>
+          <button class="btn sm" id="dRestart" disabled>Start again ↺</button>
         </figure>
       </div>
 
       <div class="legend">
-        <span><i class="sw add"></i> adds this colour</span>
-        <span><i class="sw take"></i> takes this colour away</span>
+        <span><i class="sw add"></i> pours this colour in</span>
+        <span><i class="sw take"></i> scoops this colour out</span>
         <span><i class="sw none"></i> not used</span>
       </div>
 
       <div class="card"><p id="dWhy"></p></div>
       <p class="note" id="dEdge"></p>
+      <p class="fin" id="dDone" aria-live="polite"></p>
 
       <div class="row">
         <button class="btn" id="dBack">← Back to tile by tile</button>
@@ -174,8 +176,8 @@
   </section>
 
   <!-- the order matters: engine, then data, then the interface that uses both -->
-  <script src="js/convolution.js"></script>
+  <script src="js/convolutiontest.js"></script>
   <script src="js/data.js"></script>
-  <script src="js/uit.js"></script>
+  <script src="js/uitest.js"></script>
 </body>
 </html>

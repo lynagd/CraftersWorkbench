@@ -8,15 +8,6 @@
   const RUN_TIME = 7500;    // total duration of the full simulation, in milliseconds
   const START_DELAY = 900;  // pause after the page scrolls, before the simulation starts
 
-  // Colours the user can paint the tiles with on the explanation page (values 0 to 1)
-  const PALETTE = [
-    [0xf5 / 255, 0xd4 / 255, 0xa8 / 255], // cream
-    [0xea / 255, 0x77 / 255, 0x20 / 255], // orange
-    [0x57 / 255, 0x1c / 255, 0x0a / 255], // brown
-    [0x43 / 255, 0x60 / 255, 0x66 / 255], // slate
-    [0x1f / 255, 0x09 / 255, 0x0b / 255]  // ink
-  ];
-
   const TEXT = {
     sponge: {
       what: "A wet sponge mixes the paint under it. Watch it melt 9 tiles into one soft colour.",
@@ -69,8 +60,10 @@
 
     // page 4: explanation
     dTile: null,         // the tile being explained
-    dTiles: [],          // the 9 colours under the frame (the user can repaint them)
-    dPal: [],            // palette index chosen by the user for each of the 9 tiles (-1 = original)
+    dTiles: [],          // the 9 colours under the frame
+    dPoured: [],         // for each of the 9 cups: has it been poured yet?
+    dBusy: false,        // true while a cup is pouring
+    dDrag: null,         // the cup being dragged: { k, cup, ghost, ... }
 
     // page 5: full simulation
     result: [],
@@ -254,29 +247,135 @@
     const tile = state.cur || { x: demo % cols, y: Math.floor(demo / cols) };
     state.dTile = tile;
     state.dTiles = neighbourhood(tile.x, tile.y);
-    state.dPal = Array(9).fill(-1);
+    resetPour();
+  }
+
+  const detailWeights = () => Convolution.KERNELS[state.tool].weights;
+  const usedCount = () => detailWeights().filter((w) => w !== 0).length;
+  const pouredCount = () => detailWeights().filter((w, k) => w !== 0 && state.dPoured[k]).length;
+
+  // Empty the tile and refill every cup
+  function resetPour() {
+    state.dBusy = false;
+    state.dDrag = null;
+    state.dPoured = detailWeights().map(() => false);
+    all(".flying, .stream").forEach((e) => e.remove());
     renderDetail();
   }
 
   function renderDetail() {
+    // 1. the 9 tiles (just to look at)
     $("dTiles").innerHTML = state.dTiles.map((c, k) =>
-      '<button type="button" data-k="' + k + '"' + (k === 4 ? ' class="mid"' : "") +
-      ' style="background:' + css(c) + '" aria-label="Tile ' + (k + 1) + ', tap to change its colour"></button>'
+      '<div class="t' + (k === 4 ? " mid" : "") + '" style="background:' + css(c) + '"></div>'
     ).join("");
 
-    // Each weight becomes a cup: the fuller it is, the more that tile counts
-    const weights = Convolution.KERNELS[state.tool].weights;
+    // 2. one cup per tile: coloured like its tile, filled by how much that tile counts
+    const weights = detailWeights();
     const biggest = Math.max(...weights.map(Math.abs));
-    $("dCups").innerHTML = weights.map((w) => {
+    $("dCups").innerHTML = weights.map((w, k) => {
       const kind = w === 0 ? "none" : w > 0 ? "add" : "take";
       const level = Math.round((Math.abs(w) / biggest) * 100);
-      return '<span class="cup ' + kind + '"><i style="height:' + level + '%"></i></span>';
+      const fill = w === 0 ? "" : '<i style="height:' + level + "%;background:" + css(state.dTiles[k]) + '"></i>';
+      const label = w === 0 ? "Tile " + (k + 1) + ", not used by this tool"
+                            : "Tile " + (k + 1) + ", drag it onto the empty tile";
+      return '<button type="button" class="cup ' + kind + '" data-k="' + k + '"' + (w === 0 ? " disabled" : "") +
+        ' aria-label="' + label + '">' + fill + "</button>";
     }).join("");
 
-    const small = { cols: 3, rows: 3, pixels: state.dTiles };
-    $("dOut").style.background = css(Convolution.applyAt(small, state.tool, 1, 1));
     $("dWhy").textContent = DETAIL[state.tool];
     $("dEdge").textContent = isBorder(state.dTile) ? EDGE_NOTE : "";
+    updatePour();
+  }
+
+  // 3. the tile on the right: colour made by the cups poured so far
+  function updatePour() {
+    const colour = Convolution.applyPartial(state.dTiles, state.tool, state.dPoured);
+    const out = $("dOut");
+    out.classList.toggle("empty", !colour);
+    out.style.background = colour ? css(colour) : "";
+    const n = pouredCount(), total = usedCount();
+    $("dCount").textContent = n + " of " + total + " poured";
+    $("dDone").textContent = n === total
+      ? "All poured! This is exactly the colour this tile got on the tile by tile page. Press Start again and pour in another order: you will get the same colour."
+      : "";
+    $("dRestart").disabled = n === 0 || state.dBusy;
+  }
+
+  function anim(el, frames, ms) {
+    if (reduceMotion) return Promise.resolve();
+    return el.animate(frames, { duration: ms, easing: "ease-in-out", fill: "forwards" }).finished.catch(() => {});
+  }
+
+  // A copy of the cup that follows the mouse
+  function makeGhost(cup) {
+    const r = cup.getBoundingClientRect();
+    const ghost = cup.cloneNode(true);
+    ghost.removeAttribute("data-k");
+    ghost.removeAttribute("aria-label");
+    ghost.disabled = false;
+    ghost.tabIndex = -1;
+    ghost.classList.add("flying");
+    ghost.style.left = r.left + "px";
+    ghost.style.top = r.top + "px";
+    document.body.appendChild(ghost);
+    cup.classList.add("lifted");
+    return { ghost, r };
+  }
+
+  // The cup goes over the tile, tips and pours (or dips in and scoops paint out), then the tile changes
+  async function pour(d) {
+    state.dBusy = true;
+    $("dRestart").disabled = true;
+    const { k, cup, ghost } = d;
+    const take = detailWeights()[k] < 0;
+    const out = $("dOut");
+    out.classList.remove("aim");
+    const t = out.getBoundingClientRect();
+    const g = ghost.getBoundingClientRect();
+    const h = g.width / 2;
+    const cx = t.left + t.width / 2;
+    const tr = (x, y, rot) => "translate(" + x + "px," + y + "px) rotate(" + (rot || 0) + "deg)";
+    const markDone = () => {
+      state.dPoured[k] = true;
+      cup.classList.remove("lifted");
+      cup.classList.add("done");
+      cup.disabled = true;
+      updatePour();
+    };
+    try {
+      if (!take) {
+        const dx = cx - 1.98 * h - g.left, dy = t.top - 25 - 1.17 * h - g.top;
+        await anim(ghost, [{ transform: "none" }, { transform: tr(dx, dy) }], 280);
+        await anim(ghost, [{ transform: tr(dx, dy, 0) }, { transform: tr(dx, dy, 100) }], 300);
+        const stream = document.createElement("div");
+        stream.className = "stream";
+        stream.style.background = css(state.dTiles[k]);
+        stream.style.left = cx - 3 + "px";
+        stream.style.top = t.top - 24 + "px";
+        stream.style.height = t.height * 0.45 + 24 + "px";
+        document.body.appendChild(stream);
+        anim(stream, [{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }], 180);
+        markDone();
+        await anim(ghost.querySelector("i"), [{ height: ghost.querySelector("i").style.height }, { height: "0%" }], 650);
+        await Promise.all([
+          anim(stream, [{ opacity: 1 }, { opacity: 0 }], 160),
+          anim(ghost, [{ transform: tr(dx, dy, 100), opacity: 1 }, { transform: tr(dx, dy, 100), opacity: 0 }], 200)
+        ]);
+        stream.remove();
+      } else {
+        const dx = cx - h - g.left, dy = t.top - 2 * h - 20 - g.top;
+        const dip = dy + h * 1.3 + 20;
+        await anim(ghost, [{ transform: "none" }, { transform: tr(dx, dy) }], 280);
+        await anim(ghost, [{ transform: tr(dx, dy) }, { transform: tr(dx, dip) }], 220);
+        markDone(); // the paint is scooped out of the tile
+        await anim(ghost, [{ transform: tr(dx, dip), opacity: 1 }, { transform: tr(dx, dy - 40), opacity: 0 }], 480);
+      }
+    } finally {
+      ghost.remove();
+      state.dBusy = false;
+      if (!state.dPoured[k]) { state.dPoured[k] = true; cup.classList.add("done"); cup.disabled = true; }
+      updatePour();
+    }
   }
 
 //page 5: full simulation
@@ -422,15 +521,51 @@
   $("play").addEventListener("click", goPlay);
   $("more").addEventListener("click", goDetail);
 
-  // Page 4: tap a tile to repaint it, back and play
-  $("dTiles").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-k]");
-    if (!b) return;
-    const k = Number(b.dataset.k);
-    state.dPal[k] = (state.dPal[k] + 1) % PALETTE.length;
-    state.dTiles[k] = PALETTE[state.dPal[k]].slice();
-    renderDetail();
+  // Page 4: drag a cup onto the empty tile (a simple click or Enter pours it too)
+  const overTile = (e) => {
+    const r = $("dOut").getBoundingClientRect(), m = 40;
+    return e.clientX > r.left - m && e.clientX < r.right + m && e.clientY > r.top - m && e.clientY < r.bottom + m;
+  };
+
+  $("dCups").addEventListener("pointerdown", (e) => {
+    const cup = e.target.closest(".cup");
+    if (!cup || cup.disabled || state.dBusy || state.dDrag || e.button > 0) return;
+    e.preventDefault();
+    const { ghost, r } = makeGhost(cup);
+    state.dDrag = { k: Number(cup.dataset.k), cup, ghost, ox: e.clientX - r.left, oy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false };
   });
+
+  document.addEventListener("pointermove", (e) => {
+    const d = state.dDrag;
+    if (!d) return;
+    if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 6) d.moved = true;
+    if (!d.moved) return;
+    d.ghost.style.left = e.clientX - d.ox + "px";
+    d.ghost.style.top = e.clientY - d.oy + "px";
+    $("dOut").classList.toggle("aim", overTile(e));
+  });
+
+  function endDrag(e, cancelled) {
+    const d = state.dDrag;
+    if (!d) return;
+    state.dDrag = null;
+    $("dOut").classList.remove("aim");
+    if (!cancelled && (!d.moved || overTile(e))) pour(d);
+    else { d.ghost.remove(); d.cup.classList.remove("lifted"); }
+  }
+  document.addEventListener("pointerup", (e) => endDrag(e, false));
+  document.addEventListener("pointercancel", (e) => endDrag(e, true));
+
+  $("dCups").addEventListener("click", (e) => { // keyboard (Enter / Space on a focused cup)
+    if (e.detail !== 0) return;
+    const cup = e.target.closest(".cup");
+    if (!cup || cup.disabled || state.dBusy) return;
+    pour({ k: Number(cup.dataset.k), cup, ghost: makeGhost(cup).ghost });
+  });
+
+  $("dRestart").addEventListener("click", () => { if (!state.dBusy) resetPour(); });
+
+  // Page 4: back and play
   $("dBack").addEventListener("click", () => goTo("learn"));
   $("dPlay").addEventListener("click", goPlay);
 
