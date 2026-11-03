@@ -104,16 +104,11 @@
     </div>
   </section>
 
-  <div class="strip"></div>
+  <!-- pages 4 and 5 stay hidden until a tool is chosen, so only 3 windows show at the start -->
+  <div class="strip after-tool" hidden></div>
 
   <!-- PAGE 4: why it works (no maths) -->
-  <section id="detail">
-    <div class="notool">
-      <h2>Pick a tool first</h2>
-      <p class="lead">Then we can look inside it.</p>
-      <button class="btn go toOpts">Choose a tool ↑</button>
-    </div>
-
+  <section id="detail" class="after-tool" hidden>
     <div class="with-tool" hidden>
       <h2>How the <span data-tname></span> decides</h2>
       <p class="lead">We look at one tile, step by step. Tap a tile to change its colour and watch the middle one react.</p>
@@ -148,25 +143,16 @@
       <p class="note" id="dEdge"></p>
 
       <div class="row">
-        <button class="btn sm" id="dReset">Back to my tile ↺</button>
-      </div>
-      <div class="row">
         <button class="btn" id="dBack">← Back to tile by tile</button>
         <button class="btn go" id="dPlay">Play ▶</button>
       </div>
     </div>
   </section>
 
-  <div class="strip"></div>
+  <div class="strip after-tool" hidden></div>
 
   <!-- PAGE 5: the full simulation -->
-  <section id="stage">
-    <div class="notool">
-      <h2>Pick a tool first</h2>
-      <p class="lead">The canvas is waiting for you.</p>
-      <button class="btn go toOpts">Choose a tool ↑</button>
-    </div>
-
+  <section id="stage" class="after-tool" hidden>
     <div class="with-tool" hidden>
       <div class="card"><h3 data-tname></h3><p data-twhat></p></div>
 

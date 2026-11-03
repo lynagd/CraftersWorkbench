@@ -136,9 +136,14 @@
   }
 
 //page 3: tile by tile
-  // The first tile shown should be one where something clearly happens (not a flat or border tile).
-  // After it, tiles come row by row from the top-left corner.
+  // Tiles are shown in a simple order: row by row, starting at the top-left corner.
   function buildOrder() {
+    return state.image.pixels.map((_, i) => i);
+  }
+
+  // A tile where something clearly happens (not flat, not on the border).
+  // Page 4 uses it when the user has not stepped through any tile yet.
+  function pickDemo() {
     const { cols, rows, pixels } = state.image;
     const res = state.lResult;
     const lum = (p) => 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
@@ -157,10 +162,7 @@
     const good = cand.filter((c) => c.s >= max * 0.5);
     const cx = (cols - 1) / 2, cy = (rows - 1) / 2;
     good.sort((a, b) => (a.x - cx) ** 2 + (a.y - cy) ** 2 - ((b.x - cx) ** 2 + (b.y - cy) ** 2));
-    const demo = good[0].i;
-    const order = [demo];
-    for (let i = 0; i < cols * rows; i++) if (i !== demo) order.push(i);
-    return order;
+    return good[0].i;
   }
 
   function updateLearnText() {
@@ -248,11 +250,11 @@
     return out;
   }
 
-  // Explain the tile the user just looked at (or the first one of the tile by tile page)
+  // Explain the tile the user just looked at (or a tile where something visible happens)
   function fillDetail() {
     const { cols } = state.image;
-    const first = state.order[0];
-    const tile = state.cur || { x: first % cols, y: Math.floor(first / cols) };
+    const demo = pickDemo();
+    const tile = state.cur || { x: demo % cols, y: Math.floor(demo / cols) };
     state.dTile = tile;
     state.dTiles = neighbourhood(tile.x, tile.y);
     state.dPal = Array(9).fill(-1);
@@ -343,6 +345,7 @@
     state.tool = key;
     all(".notool").forEach((e) => { e.hidden = true; });
     all(".with-tool").forEach((e) => { e.hidden = false; });
+    all(".after-tool").forEach((e) => { e.hidden = false; }); // pages 4 and 5 appear now
     all("[data-tname]").forEach((e) => { e.textContent = Convolution.KERNELS[key].name; });
     all("[data-twhat]").forEach((e) => { e.textContent = TEXT[key].what; });
     stopAnimation();
@@ -418,7 +421,7 @@
   $("play").addEventListener("click", goPlay);
   $("more").addEventListener("click", goDetail);
 
-  // Page 4: tap a tile to repaint it, reset, back and play
+  // Page 4: tap a tile to repaint it, back and play
   $("dTiles").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
     if (!b) return;
@@ -427,7 +430,6 @@
     state.dTiles[k] = PALETTE[state.dPal[k]].slice();
     renderDetail();
   });
-  $("dReset").addEventListener("click", fillDetail);
   $("dBack").addEventListener("click", () => scrollToSection("learn"));
   $("dPlay").addEventListener("click", goPlay);
 
