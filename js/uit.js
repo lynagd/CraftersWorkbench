@@ -229,10 +229,7 @@
 
   // Space only works while page 3 is the one on screen
   function learnInView() {
-    if (!state.tool) return false;
-    const r = $("learn").getBoundingClientRect();
-    const mid = window.innerHeight / 2;
-    return r.top < mid && r.bottom > mid;
+    return !!state.tool && !$("learn").hidden;
   }
 
 //page 4: why it works
@@ -322,8 +319,12 @@
   }
 
 //scrolling, tool choice and pattern choice
-  function scrollToSection(id) {
-    $(id).scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  // Only one page is visible at a time. Pages change only through buttons, never by scrolling.
+  const PAGES = ["hello", "options", "learn", "detail", "stage"];
+
+  function goTo(id) {
+    PAGES.forEach((p) => { $(p).hidden = p !== id; });
+    window.scrollTo(0, 0);
   }
 
   // Prepare a pattern on every page (without starting any animation)
@@ -343,15 +344,13 @@
 
   function chooseTool(key) {
     state.tool = key;
-    all(".notool").forEach((e) => { e.hidden = true; });
     all(".with-tool").forEach((e) => { e.hidden = false; });
-    all(".after-tool").forEach((e) => { e.hidden = false; }); // pages 4 and 5 appear now
     all("[data-tname]").forEach((e) => { e.textContent = Convolution.KERNELS[key].name; });
     all("[data-twhat]").forEach((e) => { e.textContent = TEXT[key].what; });
     stopAnimation();
     resetMessages();
     setPattern(state.pattern);
-    scrollToSection("learn");
+    goTo("learn");
   }
 
   // Go to the full simulation and start it after a short pause
@@ -363,20 +362,20 @@
     state.revealed = 0;
     state.showOriginal = false;
     drawAll();
-    scrollToSection("stage");
+    goTo("stage");
     state.startTimer = setTimeout(play, reduceMotion ? 100 : START_DELAY);
   }
 
   function goDetail() {
     stopHold();
     fillDetail();
-    scrollToSection("detail");
+    goTo("detail");
   }
 
   function goOptions() {
     stopHold();
     stopAnimation();
-    scrollToSection("options");
+    goTo("options");
   }
 
 //buttons and events
@@ -396,9 +395,11 @@
     });
   });
 
+  $("start").addEventListener("click", () => goTo("options"));
+  $("backHello").addEventListener("click", () => goTo("hello"));
   all(".toOpts").forEach((button) => button.addEventListener("click", goOptions));
   $("another").addEventListener("click", goOptions);
-  $("backLearn").addEventListener("click", () => { stopAnimation(); scrollToSection("learn"); });
+  $("backLearn").addEventListener("click", () => { stopAnimation(); goTo("learn"); });
 
   // Page 3: Next tile (hold to speed up) and Space
   const next = $("next");
@@ -430,7 +431,7 @@
     state.dTiles[k] = PALETTE[state.dPal[k]].slice();
     renderDetail();
   });
-  $("dBack").addEventListener("click", () => scrollToSection("learn"));
+  $("dBack").addEventListener("click", () => goTo("learn"));
   $("dPlay").addEventListener("click", goPlay);
 
   $("replay").addEventListener("click", play);

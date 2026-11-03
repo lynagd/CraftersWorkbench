@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kufam:wght@500;700&family=Cairo:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styletest2.css">
+  <link rel="stylesheet" href="css/styletest.css">
 </head>
 <body>
 
@@ -16,6 +16,7 @@
     <div class="hero-text">
       <h1>The Crafter’s <em>Workbench</em></h1>
       <p class="lead">See how one small tool, slid over a pattern, can soften it, sharpen it or trace its edges.</p>
+      <button class="btn go big" id="start">Start ▶</button>
     </div>
     <div class="pics">
       <img src="assets/rug.jpg" alt="Persian rug pattern">
@@ -23,10 +24,8 @@
     </div>
   </section>
 
-  <div class="strip"></div>
-
   <!-- PAGE 2: pick a tool -->
-  <section id="options">
+  <section id="options" hidden>
     <h2>Pick a tool</h2>
     <p class="lead">Each one works on the same canvas.</p>
     <div class="opts">
@@ -43,20 +42,11 @@
         <b>Edge Chalk</b><span>Marks where colours meet</span>
       </button>
     </div>
+    <button class="btn sm" id="backHello">← Back</button>
   </section>
 
-  <div class="strip"></div>
-
   <!-- PAGE 3: tile by tile -->
-  <section id="learn">
-    <!-- shown until a tool is chosen -->
-    <div class="notool">
-      <h2>Pick a tool first</h2>
-      <p class="lead">The canvas is waiting for you.</p>
-      <button class="btn go toOpts">Choose a tool ↑</button>
-    </div>
-
-    <!-- shown after a tool is chosen -->
+  <section id="learn" hidden>
     <div class="with-tool" hidden>
       <div class="card"><h3 data-tname></h3><p data-twhat></p></div>
 
@@ -101,14 +91,14 @@
         <button class="btn go" id="play">Play ▶</button>
         <button class="btn sm" id="more">More detail</button>
       </div>
+      <div class="row">
+        <button class="btn sm toOpts">← Change tool</button>
+      </div>
     </div>
   </section>
 
-  <!-- pages 4 and 5 stay hidden until a tool is chosen, so only 3 windows show at the start -->
-  <div class="strip after-tool" hidden></div>
-
   <!-- PAGE 4: why it works (no maths) -->
-  <section id="detail" class="after-tool" hidden>
+  <section id="detail" hidden>
     <div class="with-tool" hidden>
       <h2>How the <span data-tname></span> decides</h2>
       <p class="lead">We look at one tile, step by step. Tap a tile to change its colour and watch the middle one react.</p>
@@ -149,10 +139,8 @@
     </div>
   </section>
 
-  <div class="strip after-tool" hidden></div>
-
   <!-- PAGE 5: the full simulation -->
-  <section id="stage" class="after-tool" hidden>
+  <section id="stage" hidden>
     <div class="with-tool" hidden>
       <div class="card"><h3 data-tname></h3><p data-twhat></p></div>
 
@@ -179,8 +167,8 @@
         <button class="btn" id="orig">Hold to see the original</button>
       </div>
       <div class="row">
-        <button class="btn sm" id="backLearn">↑ Tile by tile</button>
-        <button class="btn sm" id="another">Try another tool ↑</button>
+        <button class="btn sm" id="backLearn">← Tile by tile</button>
+        <button class="btn sm" id="another">Try another tool</button>
       </div>
     </div>
   </section>
@@ -188,6 +176,6 @@
   <!-- the order matters: engine, then data, then the interface that uses both -->
   <script src="js/convolution.js"></script>
   <script src="js/data.js"></script>
-  <script src="js/uit2.js"></script>
+  <script src="js/uit.js"></script>
 </body>
 </html>
