@@ -9,7 +9,6 @@
   // ---------- 1. SETTINGS AND TEXTS ----------
   const TILE = 20;          // size of one tile on the canvas, in pixels (CSS scales the canvas)
   const RUN_TIME = 7500;    // total duration of one autoplay run, in milliseconds
-  const START_DELAY = 900;  // pause after the page scrolls, before autoplay starts
 
   const TEXT = {
     sponge: {
@@ -41,7 +40,7 @@
   const state = {
     tool: null,          // "sponge", "knife" or "chalk"
     pattern: "mosaic",   // "mosaic" or "rug"
-    mode: "auto",        // "auto" (plays by itself) or "step" (one tile per button press)
+    mode: "idle",        // "idle" (waiting), "auto" (plays by itself) or "step" (one tile per press)
     image: null,         // the current pattern: { cols, rows, pixels }
     result: [],          // autoplay: new colour of every tile, computed by the engine
     revealed: 0,         // autoplay: how many tiles have already been changed on screen
@@ -178,7 +177,7 @@
   function finishRun() {
     stopAnimation();
     frame.hidden = true;
-    $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
+    //$("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
     state.inspect = null; // the card will explain the middle tile
     setMoreLabel(false);
     $("more").hidden = false;
@@ -244,6 +243,24 @@
   }
 
   // ---------- 8. MODES, SCROLLING AND TOOL CHOICE ----------
+  // Waiting state: the original canvas, nothing playing, no mode chosen yet
+  function showIdle() {
+    stopAnimation();
+    resetMessages();
+    state.mode = "idle";
+    document.querySelectorAll("[data-m]").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    $("outBoard").hidden = true;
+    $("stepControls").hidden = true;
+    $("lblIn").hidden = true;
+    $("orig").hidden = true;
+    frame.hidden = true;
+    mark.hidden = true;
+    state.revealed = 0;
+    fitCanvas();
+    drawAll();
+    $("fin").textContent = "Press Autoplay to watch it by itself, or Step by step to go one tile at a time.";
+  }
+
   function setMode(mode) {
     state.mode = mode;
     document.querySelectorAll("[data-m]").forEach((b) => {
@@ -276,9 +293,8 @@
     stopAnimation();
     resetMessages();
     loadPattern(state.pattern);
+    showIdle();              // nothing plays until the learner presses a mode button
     scrollToSection("stage");
-    if (state.mode === "auto") state.startTimer = setTimeout(play, reduceMotion ? 100 : START_DELAY);
-    else resetStep();
   }
 
   // ---------- 9. BUTTONS ----------
@@ -295,12 +311,12 @@
       stopAnimation();
       resetMessages();
       loadPattern(button.dataset.c);
-      if (state.mode === "auto") play(); else resetStep();
+      if (state.mode === "step") resetStep(); else showIdle();
     });
   });
 
   $("next").addEventListener("click", stepNext);
-  $("replay").addEventListener("click", () => (state.mode === "auto" ? play() : resetStep()));
+  $("replay").addEventListener("click", () => (state.mode === "step" ? resetStep() : setMode("auto")));
 
   const goToOptions = () => { stopAnimation(); scrollToSection("options"); };
   $("another").addEventListener("click", goToOptions);
