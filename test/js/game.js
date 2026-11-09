@@ -22,6 +22,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;   // richer contrast, no more washed-out colours
+renderer.toneMappingExposure = 0.95;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(INK);
@@ -39,15 +41,6 @@ resize();
 // ---------- 2. SMALL HELPERS ----------
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, ...o });
 
-function box(w, h, d, material, x, y, z, parent = scene) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
-
 // A texture drawn with the 2D canvas API
 function canvasTexture(w, h, draw, repeat) {
   const c = document.createElement("canvas");
@@ -60,10 +53,100 @@ function canvasTexture(w, h, draw, repeat) {
   return t;
 }
 
+// ---------- 2b. REALISM HELPERS ----------
+function rand(seed) {                                 // small seeded random: same result on every reload
+  let s = Math.floor(Math.abs(seed)) % 2147483647; if (s === 0) s = 1;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+// Re-maps a box's UVs so a texture keeps its REAL size on every face (no stretching),
+// with the grain running along the longest side of each face.
+function worldUV(geo, w, h, d, tile) {
+  const uv = geo.attributes.uv;
+  const faces = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];   // +x, -x, +y, -y, +z, -z
+  faces.forEach(([fw, fh], f) => {
+    for (let i = 0; i < 4; i++) {
+      const k = f * 4 + i;
+      let u = (uv.getX(k) * fw) / tile, v = (uv.getY(k) * fh) / tile;
+      if (fh > fw) [u, v] = [v, u];
+      uv.setXY(k, u, v);
+    }
+  });
+  uv.needsUpdate = true;
+}
+
+function woodGrainTexture(base, seed = 1) {           // long, slightly wavy grain lines, light and dark
+  const R = rand(seed);
+  return canvasTexture(256, 256, (g, w, h) => {
+    g.fillStyle = base; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 110; i++) {
+      const x = R() * w, y = R() * h, len = 60 + R() * 196;
+      const w1 = (R() - 0.5) * 7, w2 = (R() - 0.5) * 7, w3 = (R() - 0.5) * 7;
+      g.strokeStyle = R() < 0.55 ? `rgba(35,18,6,${0.05 + R() * 0.1})` : `rgba(255,225,170,${0.04 + R() * 0.07})`;
+      g.lineWidth = 0.6 + R() * 1.8;
+      for (const ox of [0, -w]) for (const oy of [-h, 0, h]) {   // drawn 6 times so the tile repeats without a seam
+        g.beginPath(); g.moveTo(x + ox, y + oy);
+        g.bezierCurveTo(x + len * 0.3 + ox, y + w1 + oy, x + len * 0.7 + ox, y + w2 + oy, x + len + ox, y + w3 + oy);
+        g.stroke();
+      }
+    }
+  }, [1, 1]);
+}
+
+function plasterTexture() {                           // soft mottled patches + fine grain, like old plaster
+  const R = rand(21);
+  return canvasTexture(512, 512, (g, w, h) => {
+    g.fillStyle = "#ffffff"; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 260; i++) {
+      const x = R() * w, y = R() * h, r = 20 + R() * 70, dark = R() < 0.6;
+      const c = dark ? "120,90,55" : "255,250,235", a = dark ? 0.07 : 0.1;
+      for (const ox of [0, -w, w]) for (const oy of [0, -h, h]) {
+        const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+        gr.addColorStop(0, `rgba(${c},${a})`); gr.addColorStop(1, `rgba(${c},0)`);
+        g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+      }
+    }
+    for (let i = 0; i < 1800; i++) { g.fillStyle = `rgba(90,60,30,${R() * 0.12})`; g.fillRect(R() * w, R() * h, 1.5, 1.5); }
+  }, [0.5, 0.5]);
+}
+
+// fake "ambient occlusion": a soft dark blob on the floor under furniture, so nothing floats
+const aoTex = canvasTexture(128, 128, (g, w, h) => {
+  const r = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+  r.addColorStop(0, "rgba(0,0,0,.6)"); r.addColorStop(0.55, "rgba(0,0,0,.28)"); r.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = r; g.fillRect(0, 0, w, h);
+});
+function contact(x, z, w, d, ry = 0, opacity = 1) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({
+    map: aoTex, transparent: true, depthWrite: false, opacity, polygonOffset: true, polygonOffsetFactor: -2 }));
+  m.rotation.x = -Math.PI / 2; m.rotation.z = ry; m.position.set(x, 0.02, z); m.renderOrder = 1;
+  scene.add(m);
+}
+
+// NEW box(): same as before, but textured materials keep their real size
+function box(w, h, d, material, x, y, z, parent = scene) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  if (material.userData.tile) worldUV(geo, w, h, d, material.userData.tile);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
 // ---------- 3. THE STUDIO: a tall, bright artist's workshop ----------
 const EH = 3.3, RH = 6.4, Z_BACK = -5, Z_FRONT = 4.5, Z_MID = (Z_BACK + Z_FRONT) / 2;
-const paleWood = std(0xd9bd92), beam = std(0x2c3e42), dark = std(BRN), wood = std(0x8a5a33);
-const plaster = std(0xf1e1c4, { roughness: 1, side: THREE.DoubleSide });
+const paleWood = std(0xffffff, { map: woodGrainTexture("#d9bd92", 7), roughness: 0.75 });
+const beam     = std(0xffffff, { map: woodGrainTexture("#33474c", 5), roughness: 0.7 });
+const wood     = std(0xffffff, { map: woodGrainTexture("#8a5a33", 3), roughness: 0.7 });
+paleWood.userData.tile = 1.2; beam.userData.tile = 1.2; wood.userData.tile = 0.9;   // texture size in metres
+const dark = std(BRN);
+
+const plasterMap = plasterTexture();
+const plaster = std(0xf1e1c4, { map: plasterMap, roughness: 1, side: THREE.DoubleSide });
+const sideMap = plasterMap.clone(); sideMap.repeat.set(4.75, 1.65); sideMap.needsUpdate = true;
+const plasterSide = std(0xf1e1c4, { map: sideMap, roughness: 1, side: THREE.DoubleSide });
 scene.background = new THREE.Color(0xbfd8d2);
 
 const cyl = (r1, r2, h, mat, x, y, z, parent = scene, seg = 16) => {
@@ -76,14 +159,32 @@ const sph = (r, mat, x, y, z, parent = scene) => {
 };
 
 // light wooden floor + the real Persian rug
-const woodTex = canvasTexture(512, 512, (g, w, h) => {
-  for (let i = 0; i < 8; i++) {
-    const s = 196 + ((i * 37) % 26);
-    g.fillStyle = `rgb(${s},${Math.round(s * 0.78)},${Math.round(s * 0.55)})`; g.fillRect(i * (w / 8), 0, w / 8, h);
-    g.fillStyle = "rgba(0,0,0,.28)"; g.fillRect(i * (w / 8), 0, 3, h);
-    for (let k = 0; k < 6; k++) { g.fillStyle = "rgba(90,50,20,.07)"; g.fillRect(i * (w / 8) + 8 + k * 7, (k * 83 + i * 40) % h, 2, 90); }
+const woodTex = canvasTexture(1024, 1024, (g, w, h) => {
+  const R = rand(11), n = 12, pw = w / n;
+  for (let i = 0; i < n; i++) {
+    const x0 = i * pw, tone = 0.86 + R() * 0.26;
+    g.fillStyle = `rgb(${Math.round(206 * tone)},${Math.round(160 * tone)},${Math.round(110 * tone)})`;
+    g.fillRect(x0, 0, pw, h);
+    for (let k = 0; k < 55; k++) {                                   // grain
+      const gx = x0 + 4 + R() * (pw - 8);
+      g.strokeStyle = R() < 0.6 ? `rgba(70,38,12,${0.05 + R() * 0.12})` : `rgba(255,232,190,${0.04 + R() * 0.08})`;
+      g.lineWidth = 0.5 + R() * 1.6;
+      g.beginPath(); g.moveTo(gx, 0);
+      g.bezierCurveTo(gx + (R() - 0.5) * 12, h * 0.3, gx + (R() - 0.5) * 12, h * 0.65, gx, h); g.stroke();
+    }
+    if (R() < 0.5) {                                                 // a knot
+      const kx = x0 + pw / 2 + (R() - 0.5) * 20, ky = R() * h;
+      for (let r = 3; r < 14; r += 3) {
+        g.strokeStyle = `rgba(60,30,10,${0.3 - r * 0.015})`; g.lineWidth = 1.2;
+        g.beginPath(); g.ellipse(kx, ky, r * 0.8, r * 1.8, 0, 0, 7); g.stroke();
+      }
+    }
+    g.fillStyle = "rgba(25,12,4,.5)"; g.fillRect(x0, R() * h, pw, 2.5);   // end joint
+    g.fillStyle = "rgba(25,12,4,.55)"; g.fillRect(x0, 0, 2.5, h);         // gap between planks
+    g.fillStyle = "rgba(255,240,210,.12)"; g.fillRect(x0 + 2.5, 0, 1.5, h);
   }
 }, [6, 5]);
+
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5), std(0xffffff, { map: woodTex }));
 floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, Z_MID); floor.receiveShadow = true; scene.add(floor);
 new THREE.TextureLoader().load("assets/rug.jpg", (t) => {
@@ -103,7 +204,7 @@ function gableWall(z, hole) {
 gableWall(Z_BACK, [[-1.9, 0.9], [1.9, 0.9], [1.9, 4.4], [0, 5.5], [-1.9, 4.4]]);
 gableWall(Z_FRONT, [[-0.9, 0], [0.9, 0], [0.9, 2.3], [-0.9, 2.3]]);
 [[-6, Math.PI / 2], [6, -Math.PI / 2]].forEach(([x, ry]) => {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(Z_FRONT - Z_BACK, EH), plaster);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(Z_FRONT - Z_BACK, EH), plasterSide);
   m.position.set(x, EH / 2, Z_MID); m.rotation.y = ry; m.receiveShadow = true; m.castShadow = true; scene.add(m);
 });
 const ang = Math.atan2(RH - EH, 6), slope = Math.hypot(6, RH - EH), roofY = (EH + RH) / 2;
@@ -147,7 +248,7 @@ const forest = new THREE.Mesh(new THREE.PlaneGeometry(44, 22), new THREE.MeshBas
 forest.position.set(0, 6, -13); scene.add(forest);
 
 // light: warm sun through the window (it casts the shadows of the frame on the floor), soft fill, warm lamps
-scene.add(new THREE.HemisphereLight(0xfff0d6, 0x6a4a30, 1.25));
+scene.add(new THREE.HemisphereLight(0xfff0d6, 0x6a4a30, 0.75));
 const sun = new THREE.DirectionalLight(0xffdca0, 3.2);
 sun.position.set(1.5, 6.5, -11); sun.target.position.set(0, 0, -1);
 sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004;
@@ -162,6 +263,7 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
   const b = g.createLinearGradient(0, 0, w, 0); b.addColorStop(0, "rgba(0,0,0,1)"); b.addColorStop(0.5, "rgba(0,0,0,0)"); b.addColorStop(1, "rgba(0,0,0,1)");
   g.globalCompositeOperation = "destination-out"; g.fillStyle = b; g.fillRect(0, 0, w, h);
 });
+
 [-1.1, 0, 1.1].forEach((dx, i) => {
   const shaft = new THREE.Group();
   [0, Math.PI / 2].forEach((ry) => {
@@ -173,13 +275,55 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
 
 // ---------- 4. PROPS: the things that make it a workshop ----------
 const mat = (c, o) => std(c, o);
-function plant(x, z, s = 1, pot = 0xb5683a) {
-  cyl(0.16 * s, 0.12 * s, 0.28 * s, mat(pot), x, 0.14 * s, z);
-  const leaf = mat(0x4f7a3a);
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2, l = sph(0.09 * s, leaf, x + Math.cos(a) * 0.1 * s, (0.5 + 0.1 * (i % 3)) * s, z + Math.sin(a) * 0.1 * s);
-    l.scale.set(1, 2.8, 1); l.rotation.z = Math.cos(a) * 0.5; l.rotation.x = Math.sin(a) * 0.5;
+// ---------- REAL LEAVES AND PLANTS ----------
+function leafTexture() {                              // dark base -> light tip, pale midrib and side veins
+  return canvasTexture(64, 128, (g, w, h) => {
+    const gr = g.createLinearGradient(0, h, 0, 0);
+    gr.addColorStop(0, "#2b5a2a"); gr.addColorStop(0.6, "#4f8a3a"); gr.addColorStop(1, "#7fb04c");
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    g.strokeStyle = "rgba(220,240,170,.55)"; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 4); g.stroke();
+    g.strokeStyle = "rgba(20,50,20,.30)"; g.lineWidth = 1;
+    for (let y = 14; y < h; y += 12) {
+      g.beginPath();
+      g.moveTo(w / 2, y + 10); g.lineTo(4, y - 4);
+      g.moveTo(w / 2, y + 10); g.lineTo(w - 4, y - 4);
+      g.stroke();
+    }
+  });
+}
+function leafGeo(len, wid, droop) {                   // a curved, pointed leaf (not a ball)
+  const g = new THREE.PlaneGeometry(1, 1, 4, 8), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const u = p.getX(i) + 0.5, v = p.getY(i) + 0.5;
+    const half = (Math.sin(Math.PI * Math.pow(v, 0.7)) * wid) / 2;          // widest near the base, pointed tip
+    p.setXYZ(i, (u - 0.5) * 2 * half, v * len, droop * v * v * len - Math.abs(u - 0.5) * wid * 0.35);
   }
+  g.computeVertexNormals();
+  return g;
+}
+const leafMap = leafTexture();
+const leafMats = [0xffffff, 0xd6f0b8, 0xb9d9a0].map((c) => std(c, { map: leafMap, side: THREE.DoubleSide, roughness: 0.55 }));
+
+function plant(x, z, s = 1, pot = 0xb5683a) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.scale.setScalar(s); scene.add(g);
+  const potMat = mat(pot, { roughness: 0.8 });
+  cyl(0.15, 0.1, 0.26, potMat, 0, 0.13, 0, g, 24);                           // pot
+  cyl(0.17, 0.17, 0.04, potMat, 0, 0.28, 0, g, 24);                          // rim
+  cyl(0.145, 0.145, 0.012, mat(0x3a2415, { roughness: 1 }), 0, 0.296, 0, g, 24);   // soil
+  const R = rand(x * 97 + z * 31 + 3), n = 15;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + R() * 0.5, up = i % 3 === 0;           // every 3rd leaf stands more upright
+    const len = (up ? 0.5 : 0.38) + R() * 0.28;
+    const pivot = new THREE.Group();
+    pivot.position.set(Math.cos(a) * 0.025, 0.3, Math.sin(a) * 0.025);
+    pivot.rotation.y = Math.PI / 2 - a;                                       // which way the leaf points
+    const leaf = new THREE.Mesh(leafGeo(len, 0.15 + R() * 0.07, 0.25 + R() * 0.45), leafMats[i % 3]);
+    leaf.rotation.x = up ? 0.15 + R() * 0.2 : 0.55 + R() * 0.55;              // how far it leans out
+    leaf.castShadow = true; leaf.receiveShadow = true;
+    pivot.add(leaf); g.add(pivot);
+  }
+  contact(x, z, 0.55 * s, 0.55 * s);                                          // shadow under the pot
 }
 function ladder(x, z, ry, lean) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
@@ -264,6 +408,14 @@ for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, mat(0xf3ead6), -5.3 
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
 smallFrame(-5.96, 1.6, 1.6, Math.PI / 2, 0.6, 0.45, 3); smallFrame(5.96, 2.3, 1.2, -Math.PI / 2, 0.5, 0.6, 4);
 smallFrame(5.96, 1.8, 2.4, -Math.PI / 2, 0.55, 0.4, 5); smallFrame(5.96, 2.5, -0.4, -Math.PI / 2, 0.45, 0.45, 6);
+// soft contact shadows under the big pieces
+contact(-2.4, -1.1, 3.0, 1.5);            // big work table
+contact(3.1, -2.2, 2.4, 1.4);             // tool table
+contact(0.5, -2.3, 1.3, 1.0);             // easel
+contact(4.5, 2.4, 1.3, 2.4);              // sofa
+contact(-4.9, 1.9, 1.4, 1.9);             // cabinet
+contact(5.75, -1.4, 0.8, 1.9); contact(-5.75, -3.0, 0.8, 1.9);   // shelves
+contact(-0.9, -0.2, 0.6, 0.6); contact(1.8, -0.9, 0.6, 0.6);     // stools
 
 const interactive = [];       // everything the learner can click: paintings and tools
 
