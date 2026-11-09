@@ -101,12 +101,13 @@
     </div>
   </aside>
 
-  <p class="no-gl" id="noGL" hidden>This browser can’t show the 3D workshop. <a href="classic.html">Open the simple version</a>.</p>
+  <p class="no-gl" id="noGL" hidden>The 3D workshop could not start (press F12 to see why). <a href="classic.html">Open the simple version</a>.</p>
 
   <!-- classic scripts first (engine, data, lab), then the 3D game as a module -->
   <script src="js/convolution.js"></script>
   <script src="js/data.js"></script>
   <script src="js/lab.js"></script>
-  <script type="module" src="js/game.js"></script>
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+  <script type="module" src="js/game.js" onerror="document.getElementById('noGL').hidden = false"></script>
 </body>
 </html>

@@ -21,7 +21,7 @@ const Patterns = (() => {
   function make(name, cols, rows, colorAt) {
     const pixels = [];
     for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) pixels.push(colorAt(x, y, cols, rows));
-    return { name, cols, rows, pixels };
+    return { name, cols, rows, pixels, at: colorAt };   // `at` lets the game paint the same picture smoothly
   }
 
   // Spiral: arms that wind around the centre
@@ -50,7 +50,7 @@ const Patterns = (() => {
 
   // Zigzag: kilim-style chevrons
   const zigColors = [C.red, C.cream, C.teal, C.gold, C.brn];
-  const zigzag = make("Zigzag kilim", 16, 24, (x, y) => zigColors[(Math.abs(((x + y) % 8) - 4) + Math.floor(y / 3)) % 5]);
+  const zigzag = make("Zigzag kilim", 16, 24, (x, y) => zigColors[Math.floor(Math.abs(((x + y) % 8) - 4) + Math.floor(y / 3)) % 5]);
 
   return {
     mosaic: decode("Moroccan mosaic", 20, 20,

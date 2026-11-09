@@ -150,3 +150,8 @@ body.game { overflow: hidden; background: var(--ink); }
 @media (max-width: 760px) {
   .lab { top: auto; height: 62%; width: 100%; border-left: 0; border-top: 4px solid var(--org); }
 }
+
+/* soft vignette over the 3D view, for a more photographic look */
+body.game::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(31, 9, 11, .38) 100%); }
+.intro, .hud, .lab { z-index: 2; }
