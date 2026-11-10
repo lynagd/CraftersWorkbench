@@ -111,7 +111,7 @@ function plasterTexture() {                           // soft mottled patches + 
 }
 
 // fake "ambient occlusion": a soft dark blob on the floor under furniture, so nothing floats
-const aoTex = canvasTexture(128, 128, (g, w, h) => {
+const aoTex = canvasTexture(128, 128, (g, w, h) => { 
   const r = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
   r.addColorStop(0, "rgba(0,0,0,.6)"); r.addColorStop(0.55, "rgba(0,0,0,.28)"); r.addColorStop(1, "rgba(0,0,0,0)");
   g.fillStyle = r; g.fillRect(0, 0, w, h);
@@ -344,18 +344,7 @@ function tableAt(x, z, w, d, h) {
   box(w, 0.06, d, wood, x, h, z);
   [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([a, b]) => box(0.07, h, 0.07, wood, x + a * (w / 2 - 0.07), h / 2, z + b * (d / 2 - 0.07)));
 }
-function shelfUnit(x, z, ry) {
-  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
-  box(0.05, 2.4, 0.35, wood, -0.6, 1.2, 0, g); box(0.05, 2.4, 0.35, wood, 0.6, 1.2, 0, g);
-  [0.3, 0.9, 1.5, 2.1].forEach((y, i) => {
-    box(1.25, 0.04, 0.35, wood, 0, y, 0, g);
-    for (let k = 0; k < 4; k++) {
-      const c = [0xea7720, 0x436066, 0xf5d4a8, 0xc23b3b, 0x2a8fa8][(i + k) % 5], px = -0.45 + k * 0.3;
-      if ((i + k) % 3 === 0) box(0.2, 0.18, 0.2, mat(c), px, y + 0.11, 0, g); else cyl(0.06, 0.06, 0.18 + (k % 2) * 0.08, mat(c, { roughness: 0.5 }), px, y + 0.11, 0, g);
-    }
-  });
-  scene.add(g);
-}
+
 function sofa(x, z, ry) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
   box(1.9, 0.22, 0.85, wood, 0, 0.3, 0, g); [-0.8, 0.8].forEach((a) => [-0.35, 0.35].forEach((b) => box(0.06, 0.2, 0.06, wood, a, 0.1, b, g)));
@@ -384,6 +373,403 @@ function smallFrame(x, y, z, ry, w, h, seed) {          // decorative studies on
   const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat(0xffffff, { map: tex })); p.position.z = 0.025; g.add(p); scene.add(g);
 }
 
+// ================= 4b. REALISTIC TOOLS AND THE ARTISAN'S HAND =================
+
+// A rounded tube between two points (fingers, rods, shanks)
+function limb(a, b, r, material, parent) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), dir = B.clone().sub(A), len = dir.length();
+  if (len < 1e-6) return null;
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 4, 10), material);
+  m.position.copy(A).add(B).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  m.castShadow = true; m.receiveShadow = true;
+  parent.add(m); return m;
+}
+// A tapered tube between two points (forearm, sleeve)
+function tube(a, b, r1, r2, material, parent) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), dir = B.clone().sub(A);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r2, r1, dir.length(), 24), material);
+  m.position.copy(A).add(B).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  parent.add(m); return m;
+}
+
+// A tiny fake "studio" reflected in the metal, so steel does not look black
+let metalEnvMap = null;
+function metalEnv() {
+  if (metalEnvMap) return metalEnvMap;
+  const s = new THREE.Scene();
+  const sky = canvasTexture(256, 128, (g, w, h) => {
+    const gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0, "#fff6e2"); gr.addColorStop(0.5, "#c9d6d2"); gr.addColorStop(1, "#4a3a2a");
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    g.fillStyle = "rgba(255,255,255,.95)"; g.fillRect(40, 18, 60, 30); g.fillRect(170, 22, 40, 26);   // bright window-like patches
+  });
+  s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), new THREE.MeshBasicMaterial({ map: sky, side: THREE.BackSide })));
+  const pm = new THREE.PMREMGenerator(renderer);
+  metalEnvMap = pm.fromScene(s).texture;
+  pm.dispose();
+  return metalEnvMap;
+}
+const steelMat = (o = {}) => std(0xaab3b8, { metalness: 0.9, roughness: 0.3, envMap: metalEnv(), envMapIntensity: 0.9, ...o });
+
+// ---------- THE SPONGE: rounded, lumpy, full of pores ----------
+function spongeMaps() {
+  const R = rand(5), pores = [];
+  for (let i = 0; i < 150; i++) pores.push([R() * 256, R() * 256, 3 + R() * 9]);
+  const color = canvasTexture(256, 256, (g, w, h) => {
+    g.fillStyle = "#e4b95a"; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 70; i++) {                                    // soft light and dark patches
+      const x = R() * w, y = R() * h, r = 20 + R() * 40, gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, R() < 0.5 ? "rgba(140,90,20,.22)" : "rgba(255,228,140,.28)"); gr.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    pores.forEach(([x, y, r]) => {                                    // the holes: dark inside, pale rim
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, "rgba(70,40,5,.85)"); gr.addColorStop(0.7, "rgba(110,70,15,.55)"); gr.addColorStop(1, "rgba(255,235,170,.35)");
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    });
+  }, [1, 1]);
+  const bump = canvasTexture(256, 256, (g, w, h) => {               // same holes as a height map (dark = deep)
+    g.fillStyle = "#c8c8c8"; g.fillRect(0, 0, w, h);
+    pores.forEach(([x, y, r]) => {
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, "#000000"); gr.addColorStop(0.75, "#707070"); gr.addColorStop(1, "#c8c8c8");
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    });
+  }, [1, 1]);
+  bump.colorSpace = THREE.NoColorSpace;
+  return { color, bump };
+}
+function buildSponge(g) {
+  const W = 0.24, H = 0.1, D = 0.17, rad = 0.03, tile = 0.2;
+  const geo = new THREE.BoxGeometry(W, H, D, 16, 8, 12);
+  const p = geo.attributes.position, nr = geo.attributes.normal, uv = geo.attributes.uv, R = rand(9);
+  const ph = [R() * 6, R() * 6, R() * 6, R() * 6];
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const ax = Math.abs(nr.getX(i)), ay = Math.abs(nr.getY(i)), az = Math.abs(nr.getZ(i));
+    if (ax > ay && ax > az) uv.setXY(i, z / tile, y / tile); else if (ay > az) uv.setXY(i, x / tile, z / tile); else uv.setXY(i, x / tile, y / tile);
+    const cx = Math.max(-(W / 2 - rad), Math.min(W / 2 - rad, x));          // round every edge and corner
+    const cy = Math.max(-(H / 2 - rad), Math.min(H / 2 - rad, y));
+    const cz = Math.max(-(D / 2 - rad), Math.min(D / 2 - rad, z));
+    let dx = x - cx, dy = y - cy, dz = z - cz; const len = Math.hypot(dx, dy, dz) || 1;
+    dx /= len; dy /= len; dz /= len;
+    const lump = 0.0035 * Math.sin(x * 38 + ph[0]) * Math.sin(y * 41 + ph[1]) * Math.sin(z * 35 + ph[2]) + 0.004 * Math.sin(x * 17 + ph[3]) * Math.cos(z * 14 + ph[0]);
+    p.setXYZ(i, cx + dx * (rad + lump), cy + dy * (rad + lump), cz + dz * (rad + lump));
+    nr.setXYZ(i, dx, dy, dz);
+  }
+  p.needsUpdate = true; nr.needsUpdate = true; uv.needsUpdate = true;
+  const { color, bump } = spongeMaps();
+  const body = new THREE.Mesh(geo, std(0xffffff, { map: color, bumpMap: bump, bumpScale: 1.5, roughness: 1 }));
+  body.position.y = 0.055; body.castShadow = true; body.receiveShadow = true; g.add(body);
+  const water = std(0xcfe9f2, { roughness: 0.05, transparent: true, opacity: 0.55 });   // a few water drops on top
+  [[-0.06, 0.04], [0.02, -0.03], [0.07, 0.05], [-0.02, 0.06]].forEach(([x, z], i) => {
+    const d = sph(0.008 + 0.002 * (i % 2), water, x, 0.106, z, g); d.scale.set(1, 0.55, 1); d.castShadow = false;
+  });
+}
+
+// ---------- THE PALETTE KNIFE: turned wooden handle, steel crank, trowel blade ----------
+function buildKnife(g) {
+  const grain = woodGrainTexture("#7d4a22", 12); grain.rotation = Math.PI / 2; grain.center.set(0.5, 0.5);
+  const handleMat = std(0xffffff, { map: grain, roughness: 0.5 }), steel = steelMat();
+  const Y0 = 0.031;                                                    // height of the handle's axis above the table
+  const prof = new THREE.SplineCurve([[0, 0], [0.011, 0.004], [0.017, 0.02], [0.0205, 0.05], [0.0195, 0.075], [0.0155, 0.105], [0.0115, 0.13], [0.0105, 0.14]]
+    .map(([r, h]) => new THREE.Vector2(r, h))).getPoints(30);
+  const hg = new THREE.LatheGeometry(prof, 28); hg.rotateZ(-Math.PI / 2); hg.translate(-0.17, 0, 0);
+  const handle = new THREE.Mesh(hg, handleMat); handle.position.y = Y0; handle.castShadow = true; handle.receiveShadow = true; g.add(handle);
+  cyl(0.0108, 0.0098, 0.032, steel, -0.016, Y0, 0, g, 20).rotation.z = Math.PI / 2;          // ferrule
+  cyl(0.0128, 0.0128, 0.006, steel, -0.031, Y0, 0, g, 20).rotation.z = Math.PI / 2;          // collar
+  limb([0, Y0, 0], [0.034, Y0, 0], 0.0034, steel, g);                                         // cranked shank: straight, then a step down
+  limb([0.034, Y0, 0], [0.062, Y0 - 0.0185, 0], 0.0034, steel, g);
+  const L = 0.115, n = 28, top = [], bot = [];                                                // trowel-shaped blade, pointed at the tip
+  for (let i = 0; i <= n; i++) { const t = i / n, half = 0.0035 * (1 - t) + 0.0245 * Math.sin(Math.PI * Math.pow(t, 0.6)); top.push([L * t, half]); bot.push([L * t, -half]); }
+  const sh = new THREE.Shape(); sh.moveTo(top[0][0], top[0][1]);
+  top.forEach(([x, y]) => sh.lineTo(x, y)); bot.reverse().slice(1).forEach(([x, y]) => sh.lineTo(x, y));
+  const bg = new THREE.ExtrudeGeometry(sh, { depth: 0.0016, bevelEnabled: false }); bg.rotateX(-Math.PI / 2);   // lay it flat
+  const blade = new THREE.Mesh(bg, steel); blade.position.set(0.058, Y0 - 0.0185, 0); blade.castShadow = true; blade.receiveShadow = true; g.add(blade);
+  const smear = sph(0.012, std(ORG, { roughness: 0.35 }), 0.145, Y0 - 0.0185 + 0.002, 0.004, g);   // a smear of orange paint on the blade
+  smear.scale.set(1.3, 0.12, 0.8); smear.castShadow = false;
+  g.rotation.y = 0.5;
+}
+
+// ---------- THE CHALK: crumbly stick, paper wrapper with a torn edge ----------
+function buildChalk(g) {
+  const R = rand(31);
+  const stickTex = canvasTexture(128, 128, (c, w, h) => {
+    c.fillStyle = "#efe9db"; c.fillRect(0, 0, w, h);
+    for (let i = 0; i < 1400; i++) { c.fillStyle = R() < 0.5 ? `rgba(150,145,130,${R() * 0.25})` : `rgba(255,255,250,${R() * 0.5})`; c.fillRect(R() * w, R() * h, 1 + R() * 2, 1 + R() * 2); }
+    for (let i = 0; i < 12; i++) { c.fillStyle = `rgba(120,115,100,${0.05 + R() * 0.07})`; c.fillRect(R() * w, 0, 1.5, h); }
+  }, [1, 1]);
+  const prof = [[0, 0], [0.012, 0.0008], [0.0215, 0.006], [0.0238, 0.02], [0.0238, 0.17], [0.0225, 0.184], [0.0165, 0.1895], [0, 0.19]].map(([r, h]) => new THREE.Vector2(r, h));
+  const sg = new THREE.LatheGeometry(prof, 28), sp = sg.attributes.position;
+  for (let i = 0; i < sp.count; i++) {                                 // crumbly, slightly uneven surface
+    const x = sp.getX(i), z = sp.getZ(i), r = Math.hypot(x, z);
+    if (r > 0.001) { const k = 1 + 0.035 * Math.sin(sp.getY(i) * 90 + Math.atan2(z, x) * 5) + 0.02 * (R() - 0.5); sp.setX(i, x * k); sp.setZ(i, z * k); }
+  }
+  sg.computeVertexNormals(); sg.rotateZ(-Math.PI / 2); sg.translate(-0.095, 0, 0);
+  const stick = new THREE.Mesh(sg, std(0xffffff, { map: stickTex, roughness: 1 }));
+  stick.position.y = 0.0338; stick.castShadow = true; stick.receiveShadow = true; g.add(stick);
+  const wrapTex = canvasTexture(128, 64, (c, w, h) => {
+    c.fillStyle = "#ea7720"; c.fillRect(0, 0, w, h);
+    c.fillStyle = "#f5d4a8"; c.fillRect(0, 6, w, 3); c.fillRect(0, h - 9, w, 3);
+    for (let x = 8; x < w; x += 16) { c.beginPath(); c.moveTo(x, h / 2 - 9); c.lineTo(x + 7, h / 2); c.lineTo(x, h / 2 + 9); c.lineTo(x - 7, h / 2); c.fill(); }
+  }, [1, 1]);
+  const wg = new THREE.CylinderGeometry(0.0246, 0.0246, 0.085, 28, 1, true), wp = wg.attributes.position;
+  for (let i = 0; i <= 28; i++) wp.setY(i, wp.getY(i) + (R() - 0.2) * 0.012);                 // torn upper edge
+  wg.rotateZ(-Math.PI / 2);
+  const wrap = new THREE.Mesh(wg, std(0xffffff, { map: wrapTex, roughness: 0.9, side: THREE.DoubleSide }));
+  wrap.position.set(-0.052, 0.0338, 0); wrap.castShadow = true; g.add(wrap);
+  g.rotation.y = -0.4;
+}
+
+// ---------- THE ARTISAN'S HAND ----------
+// grip.at = [x, y, z] where the hand holds the tool (tool space), grip.r = how thick the tool is there, grip.yaw = turn of the hand
+function makeHand(grip) {
+  const holder = new THREE.Group(), h = new THREE.Group(); holder.add(h);
+  holder.position.set(...grip.at); holder.rotation.y = grip.yaw || 0;
+  const skin = std(0xd9a578, { roughness: 0.62 }), sleeve = std(0x436066, { roughness: 1 }), cuff = std(0xf5d4a8, { roughness: 0.9 });
+  const R = grip.r + 0.013;                                            // fingers follow a circle of this radius around the tool
+  const P = (dx, a) => [dx, R * Math.cos(a), -R * Math.sin(a)];       // a = 0: over the top, a > 0: down the far side, a < 0: down the near side
+  const palm = sph(0.047, skin, 0, R + 0.004, 0.032, h); palm.scale.set(0.95, 0.36, 1.05);
+  [[-0.031, 0.088, 0.0118], [-0.0105, 0.097, 0.0122], [0.0105, 0.09, 0.0116], [0.031, 0.072, 0.0104]].forEach(([dx, len, r]) => {
+    const a1 = (len * 0.42) / R, a2 = (len * 0.74) / R, a3 = len / R;
+    sph(r * 1.12, skin, dx, R, -0.004, h);                             // knuckle
+    limb(P(dx, 0), P(dx, a1), r, skin, h); limb(P(dx, a1), P(dx, a2), r * 0.94, skin, h); limb(P(dx, a2), P(dx, a3), r * 0.86, skin, h);
+  });
+  const tl = 0.075 / R;                                                // thumb, on the near side
+  limb(P(-0.05, -0.4), P(-0.044, -(0.4 + 0.45 * tl)), 0.0135, skin, h);
+  limb(P(-0.044, -(0.4 + 0.45 * tl)), P(-0.036, -(0.4 + tl)), 0.0122, skin, h);
+  const dir = new THREE.Vector3(0, -0.4, 1).normalize();               // the arm leaves backwards (towards the painter) and a little down
+  const W = [0, R + 0.002, 0.07], E = dir.clone().multiplyScalar(0.16).add(new THREE.Vector3(...W)), E2 = dir.clone().multiplyScalar(0.19).add(new THREE.Vector3(...W)), S = dir.clone().multiplyScalar(0.7).add(new THREE.Vector3(...W));
+  tube(W, E.toArray(), 0.027, 0.034, skin, h);                          // wrist and forearm
+  tube(E.toArray(), E2.toArray(), 0.05, 0.05, cuff, h);                 // cream cuff
+  tube(E2.toArray(), S.toArray(), 0.05, 0.066, sleeve, h);              // slate-blue sleeve (same colours as the palette)
+  h.traverse((m) => { if (m.isMesh) { m.castShadow = false; m.receiveShadow = false; m.raycast = () => {}; } });   // never blocks clicks
+  holder.userData.rest = holder.position.clone();
+  holder.userData.away = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), grip.yaw || 0).multiplyScalar(0.5);
+  return holder;
+}
+function showHand(t) {                                                // the hand slides in from the painter's side
+  const h = t.userData.hand; if (!h) return;
+  h.visible = true; h.position.copy(h.userData.rest).add(h.userData.away);   // start off-screen straight away
+  tween(0.9, (k) => h.position.copy(h.userData.rest).addScaledVector(h.userData.away, 1 - k));
+}
+function hideHand(t) {
+  const h = t.userData.hand; if (!h) return;
+  tween(0.35, (k) => h.position.copy(h.userData.rest).addScaledVector(h.userData.away, k), () => { h.visible = false; });
+}
+
+
+// ================= 4c. SHELF AND TABLE DECOR =================
+const BOOKCOL = [0xc23b3b, 0x436066, 0xeeb04a, 0x2a8fa8, 0xea7720, 0x7a4a2a, 0x8fa593, 0x571c0a, 0xf5d4a8];
+
+// standing books with a paper label and a gold band on each spine; returns where the row ended
+function bookRow(parent, x0, x1, y, seed) {
+  const R = rand(seed); let x = x0;
+  while (x < x1 - 0.05) {
+    const t = 0.022 + R() * 0.03, h = 0.17 + R() * 0.1, d = 0.2 + R() * 0.06;
+    box(t, h, d, mat(BOOKCOL[Math.floor(R() * BOOKCOL.length)], { roughness: 0.85 }), x + t / 2, y + h / 2, -0.01, parent);
+    box(t + 0.002, 0.03, 0.004, mat(0xf5d4a8, { roughness: 1 }), x + t / 2, y + h * 0.72, d / 2 - 0.008, parent).castShadow = false;
+    box(t + 0.002, 0.007, 0.004, mat(0xeeb04a, { roughness: 0.4 }), x + t / 2, y + h * 0.3, d / 2 - 0.008, parent).castShadow = false;
+    x += t + 0.002;
+    if (R() < 0.12 && x < x1 - 0.15) x += 0.05;
+  }
+  return x;
+}
+
+// a glazed ceramic vase (3 shapes), optionally with dried grass
+function vase(parent, x, y, z, kind, color, s = 1, grass = false) {
+  const profiles = [
+    [[0, 0], [0.04, 0], [0.06, 0.05], [0.07, 0.11], [0.05, 0.19], [0.03, 0.24], [0.034, 0.27], [0.042, 0.285]],
+    [[0, 0], [0.035, 0], [0.04, 0.05], [0.032, 0.14], [0.02, 0.2], [0.018, 0.27], [0.028, 0.3]],
+    [[0, 0], [0.05, 0], [0.075, 0.04], [0.07, 0.09], [0.055, 0.12]]
+  ];
+  const pts = new THREE.SplineCurve(profiles[kind].map(([r, h]) => new THREE.Vector2(r * s, h * s))).getPoints(28);
+  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 28), mat(color, { roughness: 0.28, metalness: 0.05, side: THREE.DoubleSide }));
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+  if (grass) {
+    const top = pts[pts.length - 1].y, R = rand(Math.floor(Math.abs(x * 100 + z * 10)) + 3), stem = mat(0xb89a5a, { roughness: 1 });
+    for (let i = 0; i < 7; i++) {
+      const a = R() * 6.28, lean = 0.1 + R() * 0.25, h = (0.12 + R() * 0.1) * s;
+      const tip = [x + Math.cos(a) * lean * h, y + top + h, z + Math.sin(a) * lean * h];
+      limb([x, y + top - 0.02, z], tip, 0.0018, stem, parent);
+      const head = sph(0.006, mat(0xd8b46a, { roughness: 1 }), tip[0], tip[1], tip[2], parent); head.scale.set(0.8, 2.2, 0.8);
+    }
+  }
+}
+
+// a glass jar with water and brushes (bristles in colour, metal ferrules, wooden handles)
+function brushJar(parent, x, y, z, water = 0x8fb5b0) {
+  const glass = std(0xa9cfc8, { roughness: 0.08, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false });
+  cyl(0.05, 0.047, 0.12, glass, x, y + 0.06, z, parent, 24).castShadow = false;
+  cyl(0.044, 0.042, 0.07, std(water, { roughness: 0.1, transparent: true, opacity: 0.5, depthWrite: false }), x, y + 0.04, z, parent, 24).castShadow = false;
+  const handle = mat(0x6b3f1e, { roughness: 0.5 }), fer = steelMat({ roughness: 0.35 }), cols = [0xea7720, 0x436066, 0xc23b3b, 0xf5d4a8, 0x2a8fa8, 0xeeb04a];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * 6.283 + 0.4, lean = 0.1 + (i % 3) * 0.05;
+    const pv = new THREE.Group(); pv.position.set(x + Math.cos(a) * 0.012, y + 0.02, z + Math.sin(a) * 0.012);
+    pv.rotation.set(Math.sin(a) * lean, 0, -Math.cos(a) * lean); parent.add(pv);
+    limb([0, 0, 0], [0, 0.2, 0], 0.0045, handle, pv);
+    cyl(0.0058, 0.0058, 0.035, fer, 0, 0.2175, 0, pv, 10);
+    cyl(0.0012, 0.0056, 0.04, mat(cols[i], { roughness: 0.9 }), 0, 0.255, 0, pv, 10);
+  }
+}
+
+// a small potted plant, same leaves as the big ones
+function miniPlant(parent, x, y, z, s = 1, potColor = 0xb5683a) {
+  const g = new THREE.Group(); g.position.set(x, y, z); g.scale.setScalar(s); parent.add(g);
+  const pm = mat(potColor, { roughness: 0.8 });
+  cyl(0.06, 0.045, 0.08, pm, 0, 0.04, 0, g, 20); cyl(0.065, 0.065, 0.015, pm, 0, 0.087, 0, g, 20);
+  cyl(0.054, 0.054, 0.006, mat(0x3a2415, { roughness: 1 }), 0, 0.094, 0, g, 20);
+  const R = rand(Math.floor(Math.abs(x * 100 + y * 50 + z * 10)) + 7);
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * 6.283 + R() * 0.6, pv = new THREE.Group();
+    pv.position.set(Math.cos(a) * 0.01, 0.095, Math.sin(a) * 0.01); pv.rotation.y = Math.PI / 2 - a;
+    const lf = new THREE.Mesh(leafGeo(0.11 + R() * 0.08, 0.06, 0.2 + R() * 0.2), leafMats[i % 3]);
+    lf.rotation.x = 0.5 + R() * 0.7; lf.castShadow = true; pv.add(lf); g.add(pv);
+  }
+}
+
+// a paint tin: steel body, paper label, coloured stripe, paint under the rim
+function paintCan(parent, x, y, z, color) {
+  const tin = steelMat({ color: 0xb9bec2, roughness: 0.4 });
+  cyl(0.055, 0.055, 0.11, tin, x, y + 0.055, z, parent, 28);
+  cyl(0.058, 0.058, 0.008, tin, x, y + 0.108, z, parent, 28);
+  cyl(0.0556, 0.0556, 0.05, mat(0xf3ead6, { roughness: 0.9 }), x, y + 0.052, z, parent, 28).castShadow = false;
+  cyl(0.0559, 0.0559, 0.012, mat(color, { roughness: 0.6 }), x, y + 0.068, z, parent, 28).castShadow = false;
+  cyl(0.05, 0.05, 0.004, std(color, { roughness: 0.25 }), x, y + 0.107, z, parent, 28).castShadow = false;
+  limb([x + 0.05, y + 0.106, z], [x + 0.054, y + 0.075, z + 0.008], 0.004, std(color, { roughness: 0.3 }), parent);   // a drip
+}
+
+// rolled sheets of paper tied with an orange band
+function rolledPapers(parent, x, y, z) {
+  const paper = mat(0xf3ead6, { roughness: 1 }), band = mat(ORG, { roughness: 0.8 });
+  [[0, 0.022, 0, 0], [0.01, 0.022, 0.048, 0.08], [0.0, 0.065, 0.024, -0.05]].forEach(([dx, dy, dz, ry]) => {
+    const r = new THREE.Group(); r.position.set(x + dx, y + dy, z + dz); r.rotation.y = ry; parent.add(r);
+    const c = cyl(0.022, 0.022, 0.3, paper, 0, 0, 0, r, 20); c.rotation.z = Math.PI / 2;
+    [-0.08, 0.08].forEach((bx) => { const b = cyl(0.0235, 0.0235, 0.014, band, bx, 0, 0, r, 20); b.rotation.z = Math.PI / 2; b.castShadow = false; });
+  });
+}
+
+// tubes of paint lying around (steel body, colour band, crimped end, screw cap)
+function paintTubes(parent, x, y, z, n, seed) {
+  const R = rand(seed), cols = [0xc23b3b, 0xeeb04a, 0x2a8fa8, 0xea7720, 0x436066, 0xf3ead6];
+  for (let i = 0; i < n; i++) {
+    const t = new THREE.Group(); t.position.set(x + (R() - 0.5) * 0.28, y + 0.012, z + (R() - 0.5) * 0.14); t.rotation.y = R() * 3.14; parent.add(t);
+    const c = cols[i % cols.length];
+    const body = cyl(0.011, 0.011, 0.085, steelMat({ roughness: 0.4 }), 0, 0, 0, t, 14); body.rotation.z = Math.PI / 2;
+    const band = cyl(0.0114, 0.0114, 0.04, mat(c, { roughness: 0.5 }), 0.008, 0, 0, t, 14); band.rotation.z = Math.PI / 2; band.castShadow = false;
+    box(0.008, 0.003, 0.022, steelMat({ roughness: 0.4 }), -0.0465, 0, 0, t);                   // flat crimped end
+    const cap = cyl(0.0085, 0.009, 0.016, mat(i % 2 ? 0x1f090b : 0xf3ead6, { roughness: 0.4 }), 0.05, 0, 0, t, 14); cap.rotation.z = Math.PI / 2;
+  }
+}
+
+// a little pixel painting in a dark frame (same style as the big ones)
+function shelfPicture(parent, x, y, z, w, h, seed, tilt = 0, ry = 0) {
+  const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.set(tilt, ry, 0); parent.add(g);
+  box(w + 0.03, h + 0.03, 0.02, mat(0x3a2013), 0, 0, 0, g);
+  const cols = ["#ea7720", "#436066", "#f5d4a8", "#c23b3b", "#2a8fa8", "#eeb04a", "#571c0a"];
+  const tex = canvasTexture(64, 64, (c) => { for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) { c.fillStyle = cols[(i * 3 + j * 5 + seed * (i % 3) + ((i * j) % 4)) % 7]; c.fillRect(i * 4, j * 4, 4, 4); } });
+  tex.magFilter = THREE.NearestFilter;
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat(0xffffff, { map: tex })); p.position.z = 0.0105; g.add(p);
+}
+
+// the shelf unit: back panel, four boards, and a different arrangement on each board
+function shelfUnit(x, z, ry) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
+  box(0.05, 2.4, 0.35, wood, -0.6, 1.2, 0, g); box(0.05, 2.4, 0.35, wood, 0.6, 1.2, 0, g);
+  box(1.2, 2.4, 0.015, mat(0xc9ae86), 0, 1.2, -0.17, g);
+  [0.3, 0.9, 1.5, 2.1].forEach((y) => box(1.25, 0.04, 0.35, wood, 0, y, 0, g));
+  box(1.25, 0.04, 0.35, wood, 0, 2.4, 0, g);
+  const s = Math.floor(Math.abs(x * 7 + z * 13));                      // each unit gets its own arrangement
+  const B = (y) => y + 0.02;                                           // top surface of a board
+  // board 1: a row of books and a tall vase with dried grass
+  bookRow(g, -0.55, 0.2, B(0.3), 11 + s); vase(g, 0.4, B(0.3), 0.02, 0, 0xc9633a, 1, true);
+  // board 2: paint tins, a brush jar, a leaning book pile
+  paintCan(g, -0.42, B(0.9), 0.02, 0xea7720); paintCan(g, -0.28, B(0.9), 0.0, 0x436066);
+  brushJar(g, 0.0, B(0.9), 0.02); box(0.3, 0.035, 0.22, mat(0x7a4a2a), 0.36, B(0.9) + 0.0175, 0, g).rotation.y = 0.1;
+  box(0.28, 0.035, 0.2, mat(0xc23b3b), 0.36, B(0.9) + 0.0525, 0, g).rotation.y = -0.08; miniPlant(g, 0.36, B(0.9) + 0.07, 0, 1);
+  // board 3: three vases of different shapes, a small picture
+  vase(g, -0.4, B(1.5), 0.0, 1, 0x436066, 1); vase(g, -0.15, B(1.5), 0.02, 2, 0xf5d4a8, 1); vase(g, 0.1, B(1.5), 0.0, 0, 0xea7720, 0.85);
+  shelfPicture(g, 0.4, B(1.5) + 0.11, -0.1, 0.18, 0.22, 3 + s, -0.12);
+  // board 4: rolled papers, leaning pictures, a little plant
+  rolledPapers(g, -0.4, B(2.1), 0.0); shelfPicture(g, 0.0, B(2.1) + 0.14, -0.13, 0.24, 0.28, 5 + s, -0.1);
+  shelfPicture(g, 0.22, B(2.1) + 0.1, -0.12, 0.2, 0.2, 2 + s, -0.1); miniPlant(g, 0.46, B(2.1), 0.0, 1.1, 0x6b8e8a);
+  scene.add(g);
+}
+
+// ---------- TABLE PIECES ----------
+function palette(x, y, z, ry, s = 1) {                                // a wooden palette with a thumb hole and wet dollops of paint
+  const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; g.scale.setScalar(s); scene.add(g);
+  const sh = new THREE.Shape(); sh.absellipse(0, 0, 0.19, 0.125, 0, Math.PI * 2, false, 0);
+  const hole = new THREE.Path(); hole.absellipse(-0.115, -0.02, 0.022, 0.015, 0, Math.PI * 2, true, 0); sh.holes.push(hole);
+  const pg = new THREE.ExtrudeGeometry(sh, { depth: 0.008, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 2 }); pg.rotateX(-Math.PI / 2);
+  const board = new THREE.Mesh(pg, std(0xffffff, { map: woodGrainTexture("#caa56f", 8), roughness: 0.55 })); board.castShadow = true; board.receiveShadow = true; g.add(board);
+  const cols = [0xc23b3b, 0xeeb04a, 0xea7720, 0x2a8fa8, 0x436066, 0xf3ead6, 0x571c0a];
+  cols.forEach((c, i) => {
+    const a = 0.35 + i * 0.62, d = sph(0.017 + (i % 3) * 0.003, std(c, { roughness: 0.25 }), Math.cos(a) * 0.14, 0.013, -Math.sin(a) * 0.082, g);
+    d.scale.set(1.1, 0.45, 1); d.castShadow = false;
+  });
+  [[0.0, 0.0, 0xd9803a, 0.03], [0.04, 0.025, 0x5f8a86, 0.022]].forEach(([dx, dz, c, r]) => { const m = sph(r, std(c, { roughness: 0.3 }), dx, 0.011, dz, g); m.scale.set(1.5, 0.22, 1); m.castShadow = false; });
+}
+function mug(x, y, z, c) {
+  cyl(0.04, 0.036, 0.09, mat(c, { roughness: 0.3 }), x, y + 0.045, z, scene, 24);
+  cyl(0.034, 0.034, 0.004, mat(0x3a2013, { roughness: 0.2 }), x, y + 0.087, z, scene, 24).castShadow = false;    // coffee
+  const hd = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.006, 8, 16, Math.PI), mat(c, { roughness: 0.3 })); hd.rotation.z = -Math.PI / 2;
+  hd.position.set(x + 0.038, y + 0.048, z); hd.castShadow = true; scene.add(hd);
+}
+function sketchbook(x, y, z, ry) {                                    // an open sketchbook with a pencil
+  const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; scene.add(g);
+  const page = canvasTexture(128, 160, (c, w, h) => {
+    c.fillStyle = "#f3ead6"; c.fillRect(0, 0, w, h); c.strokeStyle = "rgba(60,50,40,.55)"; c.lineWidth = 1.2;
+    c.beginPath(); c.arc(w * 0.45, h * 0.4, 22, 0, 7); c.stroke(); c.beginPath(); c.moveTo(20, 100); c.lineTo(60, 80); c.lineTo(100, 110); c.stroke();
+    for (let i = 0; i < 6; i++) { c.beginPath(); c.moveTo(24, 125 + i * 5); c.lineTo(24 + 40 + (i % 3) * 14, 125 + i * 5); c.stroke(); }
+  });
+  box(0.37, 0.008, 0.25, mat(0x3a2013), 0, 0.004, 0, g);                                                   // cover
+  [-1, 1].forEach((s) => { const p = box(0.17, 0.006, 0.23, mat(0xffffff, { map: page, roughness: 1 }), s * 0.087, 0.012, 0, g); p.rotation.z = -s * 0.05; p.castShadow = false; });
+  limb([0.06, 0.02, 0.16], [-0.04, 0.012, 0.13], 0.0045, mat(0xeeb04a, { roughness: 0.5 }), g);              // pencil
+  limb([-0.04, 0.012, 0.13], [-0.062, 0.0105, 0.123], 0.0036, mat(0xd9b98a, { roughness: 0.9 }), g);
+}
+function rag(x, y, z, ry) {                                           // a folded cloth with paint stains
+  const tex = canvasTexture(128, 128, (c, w, h) => {
+    c.fillStyle = "#e9dcc2"; c.fillRect(0, 0, w, h);
+    [["#ea7720", 30, 40], ["#436066", 90, 80], ["#c23b3b", 60, 100], ["#eeb04a", 100, 30]].forEach(([col, px, py]) => {
+      const gr = c.createRadialGradient(px, py, 0, px, py, 26); gr.addColorStop(0, col); gr.addColorStop(1, "rgba(233,220,194,0)"); c.fillStyle = gr; c.fillRect(0, 0, w, h);
+    });
+  });
+  const m = mat(0xffffff, { map: tex, roughness: 1 });
+  box(0.22, 0.012, 0.16, m, x, y + 0.006, z).rotation.y = ry;
+  box(0.2, 0.012, 0.14, m, x + 0.005, y + 0.018, z + 0.005).rotation.y = ry + 0.15;
+}
+function runner(x, y, z, w, d) {                                      // a woven linen runner under the tools
+  const tex = canvasTexture(256, 96, (c, W, H) => {
+    c.fillStyle = "#cdb487"; c.fillRect(0, 0, W, H);
+    for (let i = 0; i < H; i += 3) { c.fillStyle = "rgba(90,65,35,.12)"; c.fillRect(0, i, W, 1); }
+    [0, W - 28].forEach((x0) => {
+      c.fillStyle = "#571c0a"; c.fillRect(x0, 0, 28, H); c.fillStyle = "#ea7720";
+      for (let yy = 8; yy < H; yy += 16) { c.beginPath(); c.moveTo(x0 + 14, yy); c.lineTo(x0 + 22, yy + 8); c.lineTo(x0 + 14, yy + 16); c.lineTo(x0 + 6, yy + 8); c.fill(); }
+    });
+  });
+  const m = box(w, 0.004, d, mat(0xffffff, { map: tex, roughness: 1 }), x, y + 0.002, z); m.castShadow = false;
+}
+
+// ---------- WHAT GOES ON THE TWO TABLES ----------
+function workTableDecor() {                                           // the big table: top surface is at y = 0.93
+  const Y = 0.93;
+  bowls(-3.3, Y, -1.3, 4); bowls(-1.45, Y, -0.95, 3); books(-3.1, Y, -0.85, 3);
+  paintCan(scene, -2.95, Y, -1.42, 0xea7720); paintCan(scene, -2.78, Y, -1.32, 0x436066);
+  brushJar(scene, -2.5, Y, -1.4); brushJar(scene, -2.2, Y, -1.42, 0xb7a26a);
+  paintTubes(scene, -2.0, Y, -1.15, 5, 3); mug(-1.5, Y, -1.38, 0xc23b3b); rag(-1.38, Y, -1.12, 0.4);
+  sketchbook(-2.5, Y, -0.85, 0.15); palette(-1.9, Y, -0.8, 0.5);
+}
+function toolTableDecor() {                                           // the table with the three tools: top surface is at y = TOP + 0.03
+  const Y = TOP + 0.03;
+  runner(TABLE_X, Y, -2.15, 1.7, 0.46);
+  brushJar(scene, 2.3, Y, -2.48); paintTubes(scene, 2.4, Y, -1.92, 4, 5);
+  palette(3.82, Y, -1.93, -0.4, 0.8); paintCan(scene, 3.95, Y, -2.5, 0x2a8fa8); mug(2.95, Y, -2.52, 0xf5d4a8);
+}
+
+
 // easel (where the chosen painting stands) and the table with the tools
 const EASEL_X = 0.5;
 box(0.05, 2.0, 0.05, wood, EASEL_X - 0.36, 1.0, -2.25).rotation.x = -0.1;
@@ -395,15 +781,13 @@ const TABLE_X = 3.1, TOP = 0.92;
 tableAt(TABLE_X, -2.2, 1.9, 0.85, TOP);
 
 // furnishing
-tableAt(-2.4, -1.1, 2.4, 0.95, 0.9);                                         // big work table, left of the easel
-bowls(-3.2, 0.93, -1.2, 4); bowls(-1.5, 0.93, -0.9, 3); books(-2.4, 0.93, -1.3, 5); books(-3.0, 0.93, -0.8, 3);
-brushes(-2.0, 0.93, -1.2); brushes(-3.5, 0.93, -0.9); [0xea7720, 0x436066, 0xc23b3b, 0xeeb04a].forEach((c, i) => jar(-2.9 + i * 0.28, 0.93, -1.45, c));
-box(0.9, 0.012, 0.6, mat(0xf3ead6), -2.4, 0.935, -0.7).rotation.y = 0.2;      // a sheet of paper
+tableAt(-2.4, -1.1, 2.4, 0.95, 0.9);  
+workTableDecor();
+toolTableDecor();                                     
 ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9); plant(-5.4, 3.4, 1.4); plant(5.4, 4.0, 1.2, 0x6b8e8a); plant(2.2, -4.6, 1.5); plant(-1.6, -4.6, 1.1, 0x436066);
-books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xea7720); jar(3.75, TOP + 0.03, -2.45, 0x436066);
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, mat(0xf3ead6), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }   // blank canvases
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
 smallFrame(-5.96, 1.6, 1.6, Math.PI / 2, 0.6, 0.45, 3); smallFrame(5.96, 2.3, 1.2, -Math.PI / 2, 0.5, 0.6, 4);
@@ -419,7 +803,7 @@ contact(-0.9, -0.2, 0.6, 0.6); contact(1.8, -0.9, 0.6, 0.6);     // stools
 
 const interactive = [];       // everything the learner can click: paintings and tools
 
-function makeTool(key, name, x, build) {
+function makeTool(key, name, x, build, grip) {
   const g = new THREE.Group();
   build(g);
   g.position.set(x, TOP + 0.02, -2.15);
@@ -428,27 +812,14 @@ function makeTool(key, name, x, build) {
   // an invisible, slightly bigger box makes the tool easy to click, especially with a finger
   const hit = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.2, 0.26), new THREE.MeshBasicMaterial({ visible: false }));
   hit.position.y = 0.07; g.add(hit);
+  if (grip) { const hand = makeHand(grip); hand.visible = false; g.add(hand); g.userData.hand = hand; }   // the hand is built hidden
   scene.add(g); interactive.push(g);
   return g;
 }
-const sponge = makeTool("sponge", "Water Sponge", TABLE_X - 0.6, (g) => {
-  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.17), std(0xe0b345, { roughness: 1 })));
-  for (let i = 0; i < 6; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 8), std(0xb8862a, { roughness: 1 })); b.position.set(-0.09 + i * 0.036, 0.05, ((i % 2) - 0.5) * 0.08); g.add(b); }
-});
-const knife = makeTool("knife", "Palette Knife", TABLE_X, (g) => {
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.017, 0.14, 12), std(0x6b3f1e));
-  handle.rotation.z = Math.PI / 2; handle.position.set(-0.1, 0.014, 0); g.add(handle);
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.006, 0.06), std(0xd0d6d8, { metalness: 0.8, roughness: 0.3 }));
-  blade.position.set(0.07, 0.022, 0); g.add(blade);
-  g.rotation.y = 0.5; g.userData.homeQuat = g.quaternion.clone();
-});
-const chalk = makeTool("chalk", "Edge Chalk", TABLE_X + 0.6, (g) => {
-  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.18, 16), std(0xf3ead6, { roughness: 1 }));
-  stick.rotation.z = Math.PI / 2; stick.position.y = 0.024; g.add(stick);
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0255, 0.0255, 0.03, 16), std(ORG));
-  band.rotation.z = Math.PI / 2; band.position.set(-0.04, 0.024, 0); g.add(band);
-  g.rotation.y = -0.4; g.userData.homeQuat = g.quaternion.clone();
-});
+
+const sponge = makeTool("sponge", "Water Sponge", TABLE_X - 0.6, buildSponge, { at: [0, 0.055, 0], r: 0.075, yaw: 0.6 });
+const knife  = makeTool("knife", "Palette Knife", TABLE_X, buildKnife, { at: [-0.1, 0.031, 0], r: 0.022, yaw: 0.6 });
+const chalk  = makeTool("chalk", "Edge Chalk", TABLE_X + 0.6, buildChalk, { at: [0.03, 0.0338, 0], r: 0.0238, yaw: 0.6 });
 const tools = [sponge, knife, chalk];
 
 // name tags above the tools (drawn once the fonts are ready)
@@ -566,7 +937,8 @@ function chooseTool(t) {
   setStage("moving");
   hover(null);
   heldTool = t;
-  camera.attach(t);                                    // the tool now follows the camera: it is in the painter's hand
+  camera.attach(t);
+  showHand(t);                                      // the tool now follows the camera: it is in the painter's hand
   const p0 = t.position.clone(), q0 = t.quaternion.clone(), hp = holdPos();
   if (t.userData.label) t.userData.label.visible = false;      // the name tag stays on the table
   tween(1.0, (k) => { t.position.lerpVectors(p0, hp, k); t.quaternion.slerpQuaternions(q0, HOLD_QUAT, k); });
@@ -595,6 +967,7 @@ function closeLab(paintingToo) {
   if (liveTexture) { liveTexture.dispose(); liveTexture = null; }
 
   const tool = heldTool; heldTool = null;
+  hideHand(tool);    
   if (tool.userData.label) tool.userData.label.visible = true;
   scene.attach(tool);                                  // let go of the tool: it goes back to the table
   flyTo(tool, tool.userData.home, tool.userData.homeQuat, 1.0);
