@@ -64,9 +64,11 @@
         <span>3. The middle tile changes</span>
       </div>
 
-      <p class="fin" id="fin" aria-live="polite"></p>
+      <div class="finrow">
+        <p class="fin" id="fin" aria-live="polite"></p>
+        <button class="help" id="more" type="button" hidden aria-expanded="false" aria-controls="real" aria-label="More details" data-tip="More details">?</button>
+      </div>
 
-      <button class="btn" id="more" hidden aria-expanded="false" aria-controls="real">Want more detail? ▾</button>
       <div class="card real" id="real" hidden>
         <h3>In real convolution terms</h3>
         <div class="demo3">
@@ -92,11 +94,13 @@
         <p id="rwhy"></p>
       </div>
 
-      <div class="row">
-        <button class="btn go" id="replay">Replay ↺</button>
-        <button class="btn" id="orig">Hold to see the original</button>
-        <button class="btn" id="another">Put the tool back</button>
-        <button class="btn" id="otherPainting">Choose another painting</button>
+      <div class="row actions">
+        <button class="btn go" id="replay">↺ Replay</button>
+        <button class="btn" id="orig">Hold to compare</button>
+      </div>
+      <div class="nav">
+        <button class="link" id="another" type="button">← Put the tool back</button>
+        <button class="link" id="otherPainting" type="button">Another painting →</button>
       </div>
     </div>
   </aside>
