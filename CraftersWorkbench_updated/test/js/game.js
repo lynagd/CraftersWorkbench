@@ -124,8 +124,39 @@ scene.background = new THREE.Color(0xd5dbe8);
 const pmrem = new THREE.PMREMGenerator(renderer);                  // soft, realistic ambient light and reflections
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const paleMaps = woodMaps([228, 198, 152], 10), beamMaps = woodMaps([50, 54, 89], 2), floorMaps = woodMaps([214, 168, 116], 6);
+const paleMaps = woodMaps([228, 198, 152], 10), beamMaps = woodMaps([50, 54, 89], 2);
 const furnMaps = woodMaps([150, 100, 58], 4);
+// Realistic floorboards: staggered boards, per-board tone, grain, gaps
+function floorBoardMaps(base = [214, 168, 116]) {
+  const S = 1024, N = 12, pw = S / N, seg = 512;
+  const cache = new Float32Array(S * S * 2);              // [shade, gap] per pixel, computed once
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const p = Math.floor(x / pw), lx = x - p * pw;
+    const off = hash(p, 7) * seg, yy = y + off, row = Math.floor(yy / seg), ly = yy % seg;
+    const id = hash(p, row + 11);
+    const warp = fbm(lx * 0.03 + id * 20, y * 0.004) * 9;
+    const rings = 0.5 + 0.5 * Math.sin(lx * 0.35 + warp * 3);
+    const streak = vnoise(lx * 0.9 + id * 50, y * 0.02);
+    let s = (0.8 + 0.3 * id) * (0.8 + 0.14 * rings + 0.1 * streak);
+    const dx = Math.min(lx, pw - lx), dy = Math.min(ly, seg - ly);
+    let gap = 1;
+    if (dx < 1.5 || dy < 1.5) gap = 0.3;                  // dark joint between boards
+    else if (dx < 3 || dy < 3) gap = 0.85;                // slightly worn bevelled edge
+    cache[(y * S + x) * 2] = s; cache[(y * S + x) * 2 + 1] = gap;
+  }
+  const tint = (p, row) => 0.96 + 0.08 * hash(p * 3, row);
+  return {
+    map: pixelTexture(S, S, (x, y) => {
+      const s = cache[(y * S + x) * 2] * cache[(y * S + x) * 2 + 1], t = tint(Math.floor(x / pw), Math.floor((y + hash(Math.floor(x / pw), 7) * seg) / seg));
+      return [base[0] * s * t, base[1] * s, base[2] * s / t];
+    }),
+    bump: pixelTexture(S, S, (x, y) => {
+      const v = (0.5 + 0.5 * cache[(y * S + x) * 2]) * cache[(y * S + x) * 2 + 1] * 255; return [v, v, v];
+    }, null, false),
+  };
+}
+const floorMaps = floorBoardMaps();
+
 const paleWood = std(0xffffff, { map: paleMaps.map, bumpMap: paleMaps.bump, bumpScale: 1.5, roughness: 0.7 });
 const beam = std(0xffffff, { map: beamMaps.map, bumpMap: beamMaps.bump, bumpScale: 1.2, roughness: 0.6 });
 const wood = std(0xffffff, { map: furnMaps.map, bumpMap: furnMaps.bump, bumpScale: 1.5, roughness: 0.55 });
@@ -135,7 +166,7 @@ const plasterShape = std(0xffffff, { map: retile(pl.map, 0.3, 0.3), bumpMap: ret
 const plasterPlane = std(0xffffff, { map: retile(pl.map, 3, 1), bumpMap: retile(pl.bump, 3, 1), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
 
 // floor boards with grain, and the real Persian rug
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5), std(0xffffff, { map: retile(floorMaps.map, 4, 3.2), bumpMap: retile(floorMaps.bump, 4, 3.2), bumpScale: 1.2, roughness: 0.5 }));
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5), std(0xffffff, { map: retile(floorMaps.map, 4, 3.2), bumpMap: retile(floorMaps.bump, 4, 3.2), bumpScale: 2.2, roughness: 0.42, envMapIntensity: 0.9 }));
 floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, Z_MID); floor.receiveShadow = true; scene.add(floor);
 new THREE.TextureLoader().load("assets/rug.jpg", (t) => {
   t.colorSpace = SRGB; t.anisotropy = 8;
@@ -242,22 +273,139 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
 });
 
 // ---------- 4. PROPS: the things that make it a workshop ----------
-const leafGeo = (() => {
-  const s = new THREE.Shape(); s.moveTo(0, 0); s.bezierCurveTo(0.11, 0.07, 0.11, 0.22, 0, 0.32); s.bezierCurveTo(-0.11, 0.22, -0.11, 0.07, 0, 0);
-  const g = new THREE.ShapeGeometry(s, 8); g.rotateX(Math.PI / 2); return g;      // long axis along +z so lookAt can aim it
-})();
-function plant(x, z, s = 1, potColor = 0xb5683a) {
-  lathe([[0, 0], [0.11 * s, 0], [0.16 * s, 0.26 * s], [0.175 * s, 0.28 * s], [0.15 * s, 0.28 * s], [0.14 * s, 0.25 * s], [0, 0.25 * s]], std(potColor, { roughness: 0.6 }), x, 0, z);
-  cyl(0.14 * s, 0.14 * s, 0.02, std(0x3a2a1c), x, 0.25 * s, z);                    // soil
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2 + hash(i, 1), reach = (0.25 + 0.25 * hash(i, 2)) * s, top = (0.5 + 0.35 * hash(i, 3)) * s;
-    const end = new THREE.Vector3(x + Math.cos(a) * reach, top, z + Math.sin(a) * reach);
-    const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(x, 0.26 * s, z), new THREE.Vector3(x + Math.cos(a) * reach * 0.2, top + 0.15 * s, z + Math.sin(a) * reach * 0.2), end);
-    const stem = new THREE.Mesh(new THREE.TubeGeometry(curve, 8, 0.006 * s, 5), std(0x58803c)); stem.castShadow = false; scene.add(stem);
-    const leaf = new THREE.Mesh(leafGeo, std([0x4f7a3a, 0x5d8a43, 0x3f6b36][i % 3], { roughness: 0.5, side: THREE.DoubleSide }));
-    leaf.scale.setScalar(s * (1.1 + 0.5 * hash(i, 4))); leaf.position.copy(end);
-    leaf.lookAt(end.x + Math.cos(a) * 0.5, end.y - 0.35, end.z + Math.sin(a) * 0.5); leaf.rotateZ(hash(i, 5) - 0.5);
-    leaf.castShadow = false; scene.add(leaf);
+// ================= REALISTIC PLANTS =================
+const potBump = pixelTexture(128, 128, (x, y) => { const v = 120 + fbm(x * 0.15, y * 0.15) * 110; return [v, v, v]; }, [2, 1], false);
+const soilTex = pixelTexture(128, 128, (x, y) => { const n = 0.5 + fbm(x * 0.2, y * 0.2) * 0.9, s = n * (hash(x, y) > 0.9 ? 1.6 : 1); return [58 * s, 40 * s, 28 * s]; });
+const V3 = (a, b, c) => new THREE.Vector3(a, b, c);
+
+// Terracotta/ceramic pot with rim, saucer, textured soil and pebbles. Returns the height of the soil surface.
+function pot(x, z, r, h, color) {
+  const clay = std(color, { roughness: 0.8, bumpMap: potBump, bumpScale: 2 });
+  lathe([[0, 0], [r * 0.66, 0], [r * 0.7, 0.012], [r * 0.95, h * 0.92], [r, h * 0.97], [r * 1.06, h * 0.97], [r * 1.06, h * 1.07],
+         [r * 0.98, h * 1.07], [r * 0.93, h * 0.97], [r * 0.9, h * 0.9], [0, h * 0.9]], clay, x, 0.022, z);
+  lathe([[0, 0], [r * 0.85, 0], [r * 1.2, 0.018], [r * 1.28, 0.03], [r * 1.2, 0.03], [r * 0.95, 0.012], [0, 0.012]], clay, x, 0, z);   // saucer
+  const top = 0.022 + h * 0.92;
+  const soil = cyl(r * 0.93, r * 0.93, 0.02, std(0xffffff, { map: soilTex, bumpMap: soilTex, bumpScale: 3, roughness: 1 }), x, top - 0.006, z); soil.castShadow = false;
+  for (let i = 0; i < 16; i++) {                                                     // small pebbles on the soil
+    const a = hash(i, 41) * 6.28, d = r * 0.82 * Math.sqrt(hash(i, 42)), g = 0.45 + 0.35 * hash(i, 43);
+    const p = sph(0.011 * (0.7 + hash(i, 44)), std(new THREE.Color(g, g * 0.95, g * 0.88), { roughness: 0.9 }), x + Math.cos(a) * d, top + 0.004, z + Math.sin(a) * d);
+    p.scale.y = 0.55; p.castShadow = false;
+  }
+  contact(x, z, r * 5, r * 5, 0.8);
+  return top;
+}
+
+// Leaf blade: pointed outline, V-fold along the midrib, droop toward the tip. Long axis = +z, so lookAt can aim it.
+function makeLeaf(len, wid, shape, fold, droop, L = 12, J = 4) {
+  const pos = [], uv = [], idx = [], row = J * 2 + 1;
+  for (let i = 0; i <= L; i++) {
+    const t = i / L, w = wid * shape(t);
+    for (let j = -J; j <= J; j++) {
+      const u = j / J;
+      pos.push(u * w, Math.abs(u) * w * fold - droop * t * t * len, t * len);
+      uv.push(u * 0.5 + 0.5, t);
+    }
+  }
+  for (let i = 0; i < L; i++) for (let j = 0; j < J * 2; j++) {
+    const a = i * row + j, b = a + 1, c = a + row, d = c + 1;
+    idx.push(a, c, b, b, c, d);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx); g.computeVertexNormals(); return g;
+}
+// Leaf texture: gradient, speckles, fine side veins and a pale midrib
+function leafTexture(c0, c1, rib, step) {
+  return canvasTexture(128, 256, (g, w, h) => {
+    const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, c0); gr.addColorStop(1, c1);
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 1400; i++) { g.fillStyle = hash(i, 1) > 0.5 ? "rgba(255,255,200,.05)" : "rgba(0,20,0,.07)"; g.fillRect(hash(i, 2) * w, hash(i, 3) * h, 2 + hash(i, 4) * 4, 2 + hash(i, 5) * 6); }
+    g.lineCap = "round"; g.strokeStyle = "rgba(225,240,185,.22)"; g.lineWidth = 1;
+    for (let y = h - 6; y > 12; y -= step) {
+      g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w * 0.72, y - 4, w * 0.97, y - step * 1.6); g.stroke();
+      g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w * 0.28, y - 4, w * 0.03, y - step * 1.6); g.stroke();
+    }
+    g.strokeStyle = rib; g.lineWidth = 3.5; g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 6); g.stroke();
+  });
+}
+const leafMat = (tex, o = {}) => new THREE.MeshPhysicalMaterial({ map: tex, roughness: 0.45, clearcoat: 0.25, clearcoatRoughness: 0.5, side: THREE.DoubleSide, envMapIntensity: 0.8, ...o });
+
+// ---------- Rubber plant (Ficus elastica): a trunk with big glossy leaves in a spiral, ~0.9 m tall ----------
+const ficusLeaf = makeLeaf(0.24, 0.085, (t) => Math.pow(Math.sin(Math.PI * Math.pow(t, 0.75)), 0.75), 0.35, 0.18);
+const ficusMat = leafMat(leafTexture("#1f4a2a", "#3d7a3a", "rgba(220,235,170,.8)", 7), { roughness: 0.3, clearcoat: 0.5 });
+const ficusYoung = leafMat(leafTexture("#7a3530", "#8fb05a", "rgba(240,220,180,.8)", 7));
+function ficus(x, z, s = 1, potColor = 0xb5683a) {
+  const top = pot(x, z, 0.17 * s, 0.3 * s, potColor), H = 0.85 * s;
+  const trunk = new THREE.CatmullRomCurve3([V3(x, top - 0.02, z), V3(x + 0.02 * s, top + H * 0.35, z - 0.015 * s), V3(x - 0.015 * s, top + H * 0.7, z + 0.02 * s), V3(x + 0.01 * s, top + H, z)]);
+  const tm = new THREE.Mesh(new THREE.TubeGeometry(trunk, 20, 0.014 * s, 6), std(0x6e5a3c, { roughness: 0.8 })); tm.castShadow = true; scene.add(tm);
+  const n = 24, stemMat = std(0x5a7a3a, { roughness: 0.6 });
+  for (let i = 0; i < n; i++) {
+    const t = 0.28 + 0.72 * i / (n - 1), base = trunk.getPoint(t), a = i * 2.4 + hash(i, 61) * 0.5;
+    const pitch = -0.25 + 1.15 * t + (hash(i, 62) - 0.5) * 0.3;                    // low leaves droop, top leaves point up
+    const dir = V3(Math.cos(a) * Math.cos(pitch), Math.sin(pitch), Math.sin(a) * Math.cos(pitch));
+    const size = (1 - 0.35 * t) * (0.9 + 0.2 * hash(i, 63)), lp = base.clone().addScaledVector(dir, 0.05 * s * size);
+    scene.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.LineCurve3(base, lp), 1, 0.004 * s, 4), stemMat));   // leaf stalk
+    const leaf = new THREE.Mesh(ficusLeaf, i >= n - 3 ? ficusYoung : ficusMat);
+    leaf.scale.setScalar(s * size); leaf.position.copy(lp); leaf.lookAt(lp.clone().add(dir)); leaf.rotateZ((hash(i, 64) - 0.5) * 0.6);
+    leaf.castShadow = true; leaf.receiveShadow = true; scene.add(leaf);
+  }
+}
+
+// ---------- Snake plant (Sansevieria): stiff banded blades with a yellow edge, ~0.7 m tall ----------
+const snakeTex = pixelTexture(64, 512, (x, y) => {
+  const b = 0.5 + 0.5 * Math.sin(y * 0.16 + vnoise(x * 0.15, y * 0.02) * 6), e = Math.min(x, 63 - x);
+  if (e < 5) return [196, 190, 90];
+  const k = (0.7 + 0.3 * b) * (0.9 + 0.1 * hash(x, y));
+  return [(38 + 50 * b) * k, (82 + 58 * b) * k, (52 + 40 * b) * k];
+});
+const snakeMat = leafMat(snakeTex, { roughness: 0.35, clearcoat: 0.4 });
+const snakeShape = (t) => Math.pow(Math.sin(Math.PI * Math.pow(t, 0.55)), 0.45);
+const snakeBlades = [makeLeaf(0.5, 0.032, snakeShape, 0.6, 0.05, 14, 3), makeLeaf(0.7, 0.036, snakeShape, 0.6, 0.05, 14, 3), makeLeaf(0.9, 0.038, snakeShape, 0.6, 0.06, 14, 3)];
+function snakePlant(x, z, s = 1, potColor = 0x5474a1) {
+  const top = pot(x, z, 0.15 * s, 0.26 * s, potColor);
+  for (let i = 0; i < 15; i++) {
+    const a = hash(i, 71) * 6.28, rad = 0.07 * s * hash(i, 72), tilt = 0.04 + 0.3 * hash(i, 73);
+    const p = V3(x + Math.cos(a) * rad, top - 0.02, z + Math.sin(a) * rad);
+    const dir = V3(Math.cos(a) * Math.sin(tilt), Math.cos(tilt), Math.sin(a) * Math.sin(tilt));
+    const m = new THREE.Mesh(snakeBlades[i % 3], snakeMat);
+    m.scale.setScalar(s * (0.85 + 0.3 * hash(i, 74))); m.position.copy(p); m.lookAt(p.clone().add(dir)); m.rotateZ(hash(i, 75) * 6.28);
+    m.castShadow = true; scene.add(m);
+  }
+}
+
+// ---------- Boston fern: arching fronds made of many small leaflets, ~0.5 m wide ----------
+function makeFrond(len, pairs, seed) {
+  const at = (t) => V3(0, len * (0.55 * t - 0.62 * t * t), len * t), tan = (t) => V3(0, 0.55 - 1.24 * t, 1).normalize();
+  const pos = [], col = [], push = (v, c) => { pos.push(v.x, v.y, v.z); col.push(c, c, c); };
+  for (let k = 1; k <= pairs; k++) {
+    const t = 0.04 + 0.95 * (k / pairs), p = at(t), tg = tan(t), env = Math.pow(Math.sin(Math.PI * Math.pow(t, 0.7)), 0.8);
+    for (const sg of [-1, 1]) {
+      const ll = len * 0.2 * env * (0.85 + 0.3 * hash(k + seed, sg + 3)), wl = len * 0.02, side = V3(sg, 0, 0), sh = 0.88 + 0.12 * hash(k * sg, seed);
+      const b1 = p.clone().addScaledVector(tg, -wl), b2 = p.clone().addScaledVector(tg, wl);
+      const m1 = p.clone().addScaledVector(side, ll * 0.5).addScaledVector(tg, -wl * 0.6).add(V3(0, -ll * 0.04, 0));
+      const m2 = p.clone().addScaledVector(side, ll * 0.5).addScaledVector(tg, wl * 0.9).add(V3(0, -ll * 0.04, 0));
+      const tip = p.clone().addScaledVector(side, ll).addScaledVector(tg, ll * 0.5).add(V3(0, -ll * 0.2, 0));
+      [[b1, .55], [b2, .55], [m2, .8], [b1, .55], [m2, .8], [m1, .8], [m1, .8], [m2, .8], [tip, 1]].forEach(([v, c]) => push(v, c * sh));
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3)); g.computeVertexNormals();
+  const pts = []; for (let i = 0; i <= 12; i++) pts.push(at(i / 12));
+  return { leaflets: g, rachis: new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, len * 0.008, 4) };
+}
+const frondTypes = [makeFrond(0.5, 24, 1), makeFrond(0.44, 22, 2), makeFrond(0.56, 26, 3)];
+function fern(x, z, s = 1, potColor = 0xb5683a) {
+  const top = pot(x, z, 0.16 * s, 0.24 * s, potColor);
+  const mats = [0x4e8a3a, 0x5a9944, 0x447a35].map((c) => new THREE.MeshStandardMaterial({ color: c, vertexColors: true, roughness: 0.65, side: THREE.DoubleSide }));
+  const stemMat = std(0x4a6b32, { roughness: 0.7 });
+  for (let i = 0; i < 20; i++) {
+    const f = frondTypes[i % 3], g = new THREE.Group(), inner = new THREE.Group();
+    g.position.set(x + (hash(i, 31) - 0.5) * 0.04 * s, top - 0.01, z + (hash(i, 35) - 0.5) * 0.04 * s);
+    g.rotation.y = i * 2.4 + hash(i, 32) * 0.5;                                    // spread around the pot
+    inner.rotation.x = -(0.05 + 0.5 * hash(i, 33));                                // how much the frond lifts before arching over
+    inner.add(new THREE.Mesh(f.leaflets, mats[i % 3]), new THREE.Mesh(f.rachis, stemMat));
+    g.add(inner); g.scale.setScalar(s * (0.75 + 0.4 * hash(i, 34))); scene.add(g);
   }
 }
 function ladder(x, z, ry, lean) {
@@ -382,7 +530,10 @@ ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9);
-plant(-5.4, 3.4, 1.5); plant(5.4, 4.0, 1.3, 0x5474a1); plant(2.2, -4.6, 1.6); plant(-1.6, -4.6, 1.2, 0x5474a1);
+ficus(-5.4, 3.4, 1.0);
+fern(5.4, 4.0, 1.0, 0x5474a1);
+snakePlant(2.2, -4.6, 1.0, 0xb5683a);
+fern(-1.6, -4.6, 0.9, 0x5474a1);
 books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xb36633); jar(3.75, TOP + 0.03, -2.45, 0x5474a1);
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, std(0xf3ead6, { roughness: 0.9, bumpMap: retile(weave, 10, 12), bumpScale: 1 }), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04, scene, 0.008); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
