@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The Crafter’s Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kufam:wght@500;700&family=Cairo:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- SCREEN 1: welcome -->
+  <section id="hello" class="hero">
+    <div class="hero-text">
+      <h1>The Crafter’s <em>Workbench</em></h1>
+      <p class="lead">See how one small tool, slid over a pattern, can soften it, sharpen it or trace its edges.</p>
+    </div>
+    <div class="pics">
+      <img src="assets/rug.jpg" alt="Persian rug pattern">
+      <img src="assets/mosaic.jpg" alt="Moroccan mosaic">
+    </div>
+  </section>
+
+  <div class="strip"></div>
+
+  <!-- SCREEN 2: pick a tool -->
+  <section id="options">
+    <h2>Pick a tool</h2>
+    <p class="lead">Each one works on the same canvas.</p>
+    <div class="opts">
+      <button class="opt" data-t="sponge">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="13" width="34" height="23" rx="7"/><circle cx="17" cy="22" r="2"/><circle cx="29" cy="26" r="2"/><circle cx="24" cy="20" r="1.5"/></svg>
+        <b>Water Sponge</b><span>Melts colours together</span>
+      </button>
+      <button class="opt" data-t="knife">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 42l12-12"/><path d="M18 30L34 8l8 8-20 18z"/></svg>
+        <b>Palette Knife</b><span>Makes colours pop</span>
+      </button>
+      <button class="opt" data-t="chalk">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="17" y="5" width="13" height="30" rx="3" transform="rotate(25 24 20)"/><path d="M8 43h32"/></svg>
+        <b>Edge Chalk</b><span>Marks where colours meet</span>
+      </button>
+    </div>
+  </section>
+
+  <div class="strip"></div>
+
+  <!-- SCREEN 3: the canvas -->
+  <section id="stage">
+    <!-- shown until a tool is chosen -->
+    <div id="noTool">
+      <h2>Pick a tool first</h2>
+      <p class="lead">The canvas is waiting for you.</p>
+      <button class="btn go" id="toOpts">Choose a tool ↑</button>
+    </div>
+
+    <!-- shown after a tool is chosen -->
+    <div id="withTool" class="with-tool" hidden>
+      <div class="card"><h3 id="tName"></h3><p id="tWhat"></p></div>
+
+      <!-- how the learner wants to watch: by itself, or one tile at a time -->
+      <div class="row" role="group" aria-label="Mode">
+        <button class="btn" data-m="auto" aria-pressed="true">Autoplay</button>
+        <button class="btn" data-m="step" aria-pressed="false">Step by step</button>
+      </div>
+
+      <div class="row" role="group" aria-label="Pattern">
+        <button class="btn" data-c="mosaic" aria-pressed="true">Moroccan mosaic</button>
+        <button class="btn" data-c="rug" aria-pressed="false">Persian rug</button>
+      </div>
+
+      <!-- original canvas on the left; the result frame appears on the right in step mode -->
+      <div class="boards">
+        <div class="board">
+          <div class="wrap" id="wrap">
+            <canvas id="cv" aria-label="Original canvas"></canvas>
+            <div class="win" id="win" hidden></div>
+          </div>
+          <p class="lbl" id="lblIn" hidden>Original</p>
+        </div>
+        <div class="board" id="outBoard" hidden>
+          <div class="wrap out" id="wrapOut">
+            <canvas id="cvOut" aria-label="Result canvas"></canvas>
+            <div class="mark" id="mark" hidden></div>
+          </div>
+          <p class="lbl">Result</p>
+        </div>
+      </div>
+
+      <div class="row" id="stepControls" hidden>
+        <button class="btn go" id="next">Next step ▶</button>
+      </div>
+
+      <div class="steps">
+        <span>1. The glow covers 9 tiles</span>
+        <span>2. The tool mixes them</span>
+        <span>3. The middle tile changes</span>
+      </div>
+
+      <p class="fin" id="fin" aria-live="polite"></p>
+
+      <button class="btn" id="more" hidden aria-expanded="false" aria-controls="real">Want more detail? ▾</button>
+      <div class="card real" id="real" hidden>
+        <h3>In real convolution terms</h3>
+        <div class="demo3">
+          <figure><div class="g3" id="gTiles"></div><figcaption>Tiles under the frame</figcaption></figure>
+          <span class="conn">mixed with</span>
+          <figure><div class="g3" id="gWeights"></div><figcaption>How much each one counts</figcaption></figure>
+          <span class="conn">gives</span>
+          <figure><div class="swatch" id="gResult"></div><figcaption>The new tile</figcaption></figure>
+        </div>
+        <p class="legend">
+          <span><i class="chip" style="background:#ea7720"></i>adds</span>
+          <span><i class="chip" style="background:#436066"></i>takes away</span>
+          <span>Stronger colour: counts more</span>
+          <span>Ringed tile: the one that changes</span>
+        </p>
+        <ul class="terms">
+          <li><b>Glowing frame</b> = the <b>kernel</b>, a small filter that slides over the image</li>
+          <li><b>Tiles inside it</b> = the <b>pixels</b> under the kernel</li>
+          <li><b>Your tool</b> = the <b>weights</b> (the colours). Each pixel is multiplied by its weight, then all the results are added up</li>
+          <li><b>Ringed tile</b> = the <b>output pixel</b>, the one that changes</li>
+          <li><b>Whole pass</b> = a <b>convolution</b>: the same kernel at every position makes a new image</li>
+        </ul>
+        <p id="rwhy"></p>
+      </div>
+
+      <div class="row">
+        <button class="btn go" id="replay">Replay ↺</button>
+        <button class="btn" id="orig">Hold to see the original</button>
+        <button class="btn" id="another">Try another tool ↑</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- the order matters: engine, then data, then the interface that uses both -->
+  <script src="js/convolution.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
