@@ -134,8 +134,49 @@ const pl = plasterMaps([241, 225, 196]);
 const plasterShape = std(0xffffff, { map: retile(pl.map, 0.3, 0.3), bumpMap: retile(pl.bump, 0.3, 0.3), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
 const plasterPlane = std(0xffffff, { map: retile(pl.map, 3, 1), bumpMap: retile(pl.bump, 3, 1), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
 
-// floor boards with grain, and the real Persian rug
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5), std(0xffffff, { map: retile(floorMaps.map, 4, 3.2), bumpMap: retile(floorMaps.bump, 4, 3.2), bumpScale: 1.2, roughness: 0.5 }));
+// floor: real wooden boards, and the real Persian rug
+// colour + bump canvases computed pixel by pixel: fn(x, y) -> { c: [r,g,b], h: 0..1 }
+function pixelMaps(w, h, fn, repeat) {
+  const mk = () => { const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); return [c, g, g.createImageData(w, h)]; };
+  const [cc, cg, cd] = mk(), [bc, bg, bd] = mk();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const o = fn(x, y), i = (y * w + x) * 4, k = Math.round(o.h * 255);
+    cd.data[i] = o.c[0]; cd.data[i + 1] = o.c[1]; cd.data[i + 2] = o.c[2]; cd.data[i + 3] = 255;
+    bd.data[i] = bd.data[i + 1] = bd.data[i + 2] = k; bd.data[i + 3] = 255;
+  }
+  cg.putImageData(cd, 0, 0); bg.putImageData(bd, 0, 0);
+  const wrap = (cv, srgb) => {
+    const t = new THREE.CanvasTexture(cv); if (srgb) t.colorSpace = SRGB; t.anisotropy = 8;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; if (repeat) t.repeat.set(repeat[0], repeat[1]); return t;
+  };
+  return { map: wrap(cc, true), bump: wrap(bc, false) };
+}
+
+// Real wooden boards: 8 boards across, two staggered board lengths per tile, each with its own tone,
+// grain, a few knots, dark gaps between boards and soft bevelled edges.
+const boardMaps = pixelMaps(512, 1024, (x, y) => {
+  const PW = 64, SEG = 512;
+  const p = Math.floor(x / PW), lx = x - p * PW;
+  const yy = (y + Math.floor(hash(p, 7) * SEG)) % 1024, seg = Math.floor(yy / SEG), ly = yy - seg * SEG;
+  const b = p * 2 + seg + 1;                                        // board id
+  const tone = hash(b, 1), warm = hash(b, 2);
+  const base = [198 + 36 * tone + 8 * warm, 142 + 34 * tone, 92 + 26 * tone - 6 * warm];
+  const n = fbm(lx * 0.09 + b * 7.3, ly * 0.012 + b * 3.1);
+  let rings = 0.5 + 0.5 * Math.sin(lx * 0.34 + n * 14 + hash(b, 5) * 6.28);
+  const pores = vnoise(lx * 0.9 + b * 13, ly * 0.05);
+  let shade = 0.80 + 0.12 * rings + 0.14 * (pores - 0.5) + 0.12 * (n - 0.5);
+  if (hash(b, 9) > 0.72) {                                          // a knot on some boards
+    const kx = 14 + hash(b, 10) * 36, ky = 60 + hash(b, 11) * 390, r = Math.hypot(lx - kx, (ly - ky) * 0.45);
+    if (r < 11) { shade *= 0.62 + 0.38 * smooth(r / 11) + 0.08 * Math.sin(r * 1.7); rings = 0.3; }
+  }
+  const d = Math.min(lx, PW - 1 - lx), e = Math.min(ly, SEG - 1 - ly);
+  const gap = Math.min(smooth(Math.min(1, d / 2.2)), smooth(Math.min(1, e / 2.2)));   // 0 in the crack, 1 on the board
+  shade *= 0.35 + 0.65 * gap;
+  const hgt = 0.12 + 0.88 * gap;
+  return { c: [base[0] * shade, base[1] * shade, base[2] * shade], h: Math.max(0, Math.min(1, hgt * (0.9 + 0.1 * rings))) };
+}, [8, 3]);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5),
+  std(0xffffff, { map: boardMaps.map, bumpMap: boardMaps.bump, bumpScale: 1.6, roughness: 0.55 }));
 floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, Z_MID); floor.receiveShadow = true; scene.add(floor);
 new THREE.TextureLoader().load("assets/rug.jpg", (t) => {
   t.colorSpace = SRGB; t.anisotropy = 8;
@@ -242,23 +283,130 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
 });
 
 // ---------- 4. PROPS: the things that make it a workshop ----------
-const leafGeo = (() => {
-  const s = new THREE.Shape(); s.moveTo(0, 0); s.bezierCurveTo(0.11, 0.07, 0.11, 0.22, 0, 0.32); s.bezierCurveTo(-0.11, 0.22, -0.11, 0.07, 0, 0);
-  const g = new THREE.ShapeGeometry(s, 8); g.rotateX(Math.PI / 2); return g;      // long axis along +z so lookAt can aim it
-})();
-function plant(x, z, s = 1, potColor = 0xb5683a) {
-  lathe([[0, 0], [0.11 * s, 0], [0.16 * s, 0.26 * s], [0.175 * s, 0.28 * s], [0.15 * s, 0.28 * s], [0.14 * s, 0.25 * s], [0, 0.25 * s]], std(potColor, { roughness: 0.6 }), x, 0, z);
-  cyl(0.14 * s, 0.14 * s, 0.02, std(0x3a2a1c), x, 0.25 * s, z);                    // soil
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2 + hash(i, 1), reach = (0.25 + 0.25 * hash(i, 2)) * s, top = (0.5 + 0.35 * hash(i, 3)) * s;
-    const end = new THREE.Vector3(x + Math.cos(a) * reach, top, z + Math.sin(a) * reach);
-    const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(x, 0.26 * s, z), new THREE.Vector3(x + Math.cos(a) * reach * 0.2, top + 0.15 * s, z + Math.sin(a) * reach * 0.2), end);
-    const stem = new THREE.Mesh(new THREE.TubeGeometry(curve, 8, 0.006 * s, 5), std(0x58803c)); stem.castShadow = false; scene.add(stem);
-    const leaf = new THREE.Mesh(leafGeo, std([0x4f7a3a, 0x5d8a43, 0x3f6b36][i % 3], { roughness: 0.5, side: THREE.DoubleSide }));
-    leaf.scale.setScalar(s * (1.1 + 0.5 * hash(i, 4))); leaf.position.copy(end);
-    leaf.lookAt(end.x + Math.cos(a) * 0.5, end.y - 0.35, end.z + Math.sin(a) * 0.5); leaf.rotateZ(hash(i, 5) - 0.5);
-    leaf.castShadow = false; scene.add(leaf);
+// leaf texture: the outline comes from the geometry; the texture paints colour, midrib, veins (and the slits of a monstera)
+function leafTexture(kind) {
+  return canvasTexture(128, 256, (g, w, h) => {
+    const P = { ficus: ["#3d6a2c", "#1f4a24"], snake: ["#2c5230", "#16331d"], spider: ["#5d9a3c", "#3b7a2c"], monstera: ["#2b6b34", "#154a27"] }[kind];
+    const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, P[0]); gr.addColorStop(1, P[1]);
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 900; i++) {                                               // fine mottling
+      g.fillStyle = Math.random() < 0.5 ? "rgba(255,255,200,.05)" : "rgba(0,20,0,.07)";
+      g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 3, 1 + Math.random() * 6);
+    }
+    if (kind === "snake") {                                                       // wavy dark bands + yellow-green margins
+      for (let y = 0; y < h; y += 7) { g.strokeStyle = `rgba(10,35,18,${0.15 + 0.25 * hash(y, 3)})`; g.lineWidth = 2 + 3 * hash(y, 4);
+        g.beginPath(); for (let x = 0; x <= w; x += 8) g.lineTo(x, y + Math.sin(x * 0.15 + y) * 3); g.stroke(); }
+      g.fillStyle = "rgba(200,190,80,.8)"; g.fillRect(0, 0, 7, h); g.fillRect(w - 7, 0, 7, h);
+      return;
+    }
+    if (kind === "spider") {                                                      // cream margins, green centre
+      g.fillStyle = "rgba(235,232,190,.92)"; g.fillRect(0, 0, 30, h); g.fillRect(w - 30, 0, 30, h);
+      g.strokeStyle = "rgba(60,110,40,.6)"; g.lineWidth = 1;
+      for (let x = 34; x < w - 30; x += 8) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+      return;
+    }
+    g.strokeStyle = "rgba(200,230,150,.75)"; g.lineWidth = 4; g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 0); g.stroke();   // midrib
+    g.lineWidth = 1.4; g.strokeStyle = "rgba(190,225,140,.38)";                  // side veins
+    for (let y = h - 14; y > 14; y -= 15) for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w / 2 + s * w * 0.28, y - 8, w / 2 + s * w * 0.5, y - 34); g.stroke();
+    }
+    if (kind === "monstera") {                                                    // the signature slits (see-through)
+      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
+      for (let y = h * 0.2; y < h * 0.9; y += 28) for (const s of [-1, 1]) {
+        const ex = s < 0 ? -2 : w + 2, ix = w / 2 + s * w * 0.14;
+        g.beginPath(); g.moveTo(ex, y - 5); g.lineTo(ix, y + 5); g.lineTo(ex, y + 11); g.closePath(); g.fill();
+      }
+      g.globalCompositeOperation = "source-over";
+    }
+  });
+}
+
+// a leaf surface: length along +z, width along x, normal up. Gently folded along the midrib and drooping toward the tip.
+function leafGeometry({ len, wid, droop = 0.2, fold = 0.25, profile, nu = 6, nv = 14 }) {
+  const geo = new THREE.PlaneGeometry(1, 1, nu, nv), pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), py = pos.getY(i), t = py + 0.5, x = -px * 2 * (wid / 2) * profile(t);
+    pos.setXYZ(i, x, fold * Math.abs(x) - droop * len * t * t, t * len);
   }
+  geo.computeVertexNormals();
+  return geo;
+}
+function leafMaterials(kind, extra = {}) {
+  const tex = leafTexture(kind), tints = [0xffffff, 0xe6f2d6, 0xd2e6c0];
+  return tints.map((c) => new THREE.MeshStandardMaterial({ map: tex, color: c, roughness: kind === "snake" ? 0.4 : 0.5, metalness: 0,
+    side: THREE.DoubleSide, emissive: 0x0b2a0c, emissiveIntensity: 0.35, alphaTest: kind === "monstera" ? 0.5 : 0, ...extra }));
+}
+function addLeaf(parent, geo, mat, pos, az, elev, roll, sc) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.copy(pos); m.rotation.order = "YXZ"; m.rotation.set(-elev, az, roll); m.scale.setScalar(sc);
+  m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
+}
+function stem(parent, pts, radius, mat) {
+  const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 14, radius, 6), mat);
+  m.castShadow = true; parent.add(m); return m;
+}
+
+const LEAF = {};                                                                  // built once, shared by every plant
+function leafKit() {
+  if (LEAF.ficus) return LEAF;
+  LEAF.ficus = { geo: leafGeometry({ len: 0.30, wid: 0.17, droop: 0.18, fold: 0.3, profile: (t) => Math.pow(Math.sin(Math.PI * Math.pow(t, 0.78)), 0.75) }), mats: leafMaterials("ficus", { roughness: 0.32 }) };
+  LEAF.snake = { geo: leafGeometry({ len: 0.62, wid: 0.085, droop: 0.06, fold: 1.2, profile: (t) => Math.pow(1 - Math.pow(t, 2.4), 0.6) * (0.7 + 0.3 * Math.min(1, t * 8)) }), mats: leafMaterials("snake", { roughness: 0.38 }) };
+  LEAF.spider = { geo: leafGeometry({ len: 0.60, wid: 0.045, droop: 0.55, fold: 0.7, nv: 18, profile: (t) => Math.pow(1 - Math.pow(t, 3), 0.5) * (0.5 + 0.5 * Math.min(1, t * 6)) }), mats: leafMaterials("spider") };
+  LEAF.monstera = { geo: leafGeometry({ len: 0.34, wid: 0.34, droop: 0.12, fold: 0.18, nu: 10, nv: 14, profile: (t) => Math.pow(Math.sin(Math.PI * (t * 0.9 + 0.05)), 0.62) }), mats: leafMaterials("monstera", { roughness: 0.35 }) };
+  return LEAF;
+}
+
+// kind: "ficus" | "snake" | "spider" | "monstera"; s = overall size; glazed = shiny ceramic pot instead of terracotta
+function plant(x, z, s = 1, potColor = 0xb5683a, kind = "ficus") {
+  const K = leafKit(), L = K[kind], g = new THREE.Group(); g.position.set(x, 0, z); g.scale.setScalar(s); scene.add(g);
+  const glazed = potColor !== 0xb5683a, B = 0.03;
+  const pm = pixelMaps(64, 64, (px, py) => {
+    const n = fbm(px * 0.12, py * 0.12), c = new THREE.Color(potColor), k = (glazed ? 0.96 : 0.82) + 0.22 * n;
+    return { c: [c.r * 255 * k, c.g * 255 * k, c.b * 255 * k], h: n };
+  }, [3, 1]);
+  const potMat = std(0xffffff, { map: pm.map, bumpMap: glazed ? null : pm.bump, bumpScale: 1.2, roughness: glazed ? 0.22 : 0.85, side: THREE.DoubleSide });
+  const profile = [[0, 0], [0.09, 0], [0.097, 0.012], [0.145, 0.27], [0.158, 0.285], [0.168, 0.30], [0.168, 0.32], [0.158, 0.322], [0.15, 0.31], [0.14, 0.28], [0, 0.28]];
+  const pot = new THREE.Mesh(new THREE.LatheGeometry(profile.map(([r, h]) => new THREE.Vector2(r, h)), 40), potMat);
+  pot.position.y = B; pot.castShadow = true; pot.receiveShadow = true; g.add(pot);
+  cyl(0.2, 0.15, B, std(glazed ? 0xd8cdb8 : 0xa2552f, { roughness: glazed ? 0.3 : 0.85 }), 0, B / 2, 0, g, 36);       // saucer
+  const SY = B + 0.268;                                                                                           // soil surface
+  const soilTex = canvasTexture(64, 64, (c) => { c.fillStyle = "#33261a"; c.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 260; i++) { c.fillStyle = `rgba(${Math.random() < 0.5 ? "90,65,40" : "10,6,3"},.5)`; c.fillRect(Math.random() * 64, Math.random() * 64, 1 + Math.random() * 2, 1 + Math.random() * 2); } });
+  const soil = new THREE.Mesh(new THREE.CircleGeometry(0.142, 28), std(0xffffff, { map: soilTex, roughness: 1 }));
+  soil.rotation.x = -Math.PI / 2; soil.position.y = SY; soil.receiveShadow = true; g.add(soil);
+  for (let i = 0; i < 9; i++) { const a = hash(i, 21) * 6.28, r = 0.04 + 0.09 * hash(i, 22);                         // a few pebbles on the soil
+    const p = sph(0.012 + 0.008 * hash(i, 23), std(0x8d8678, { roughness: 0.9 }), Math.cos(a) * r, SY + 0.004, Math.sin(a) * r, g); p.scale.y = 0.6; p.castShadow = false; }
+  contact(x, z, 0.78 * s, 0.78 * s, 0.8);                                                                         // soft shadow on the floor
+
+  const root = new THREE.Vector3(0, SY, 0), mat = (i) => L.mats[i % 3], bark = std(0x6b5a48, { roughness: 0.85 }), green = std(0x587f3a, { roughness: 0.6 });
+  if (kind === "ficus") {                                                         // a tall rubber/fiddle-leaf tree
+    const trunk = new THREE.CatmullRomCurve3([root, new THREE.Vector3(0.02, SY + 0.3, 0.01), new THREE.Vector3(-0.02, SY + 0.62, 0.02), new THREE.Vector3(0.01, SY + 0.92, -0.01)]);
+    stem(g, trunk.getPoints(8), 0.016, bark);
+    for (let i = 0; i < 26; i++) {
+      const t = 0.22 + 0.78 * (i / 25), p = trunk.getPoint(t), az = i * 2.399 + hash(i, 1), up = 0.25 + 0.7 * t;
+      p.x += Math.cos(az) * 0.02; p.z += Math.sin(az) * 0.02;
+      addLeaf(g, L.geo, mat(i), p, Math.PI / 2 - az, up * 0.9, (hash(i, 2) - 0.5) * 0.5, (1.15 - 0.35 * t) * (0.85 + 0.3 * hash(i, 3)));
+    }
+  } else if (kind === "snake") {                                                  // stiff upright sword-shaped leaves
+    for (let i = 0; i < 11; i++) {
+      const az = i * 2.399, r = 0.03 + 0.05 * hash(i, 1), sc = 0.7 + 0.75 * hash(i, 2);
+      addLeaf(g, L.geo, mat(i), new THREE.Vector3(Math.cos(az) * r, SY, Math.sin(az) * r), Math.PI / 2 - az, 1.25 + 0.25 * hash(i, 3), (hash(i, 4) - 0.5) * 1.2, sc);
+    }
+  } else if (kind === "spider") {                                                 // a fountain of arching striped leaves
+    for (let i = 0; i < 24; i++) {
+      const az = i * 2.399 + hash(i, 1), r = 0.015 + 0.03 * hash(i, 2);
+      addLeaf(g, L.geo, mat(i), new THREE.Vector3(Math.cos(az) * r, SY, Math.sin(az) * r), Math.PI / 2 - az, 0.55 + 0.75 * hash(i, 3), (hash(i, 4) - 0.5) * 0.6, 0.8 + 0.5 * hash(i, 5));
+    }
+  } else if (kind === "monstera") {                                               // big split leaves on long arching stalks
+    for (let i = 0; i < 9; i++) {
+      const az = i * 2.399 + 0.4, hgt = 0.28 + 0.55 * hash(i, 1) + 0.06 * i, out = 0.1 + 0.28 * hash(i, 2), sc = 1.0 + 0.5 * hash(i, 3);
+      const end = new THREE.Vector3(Math.cos(az) * out, SY + hgt, Math.sin(az) * out);
+      const mid = new THREE.Vector3(Math.cos(az) * out * 0.25, SY + hgt * 0.75, Math.sin(az) * out * 0.25);
+      stem(g, [root, mid, end], 0.0065, green);
+      addLeaf(g, L.geo, mat(i), end, Math.PI / 2 - az, 0.45 - 0.5 * hash(i, 4), (hash(i, 5) - 0.5) * 0.3, sc);
+    }
+  }
+  return g;
 }
 function ladder(x, z, ry, lean) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
@@ -382,7 +530,7 @@ ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9);
-plant(-5.4, 3.4, 1.5); plant(5.4, 4.0, 1.3, 0x6b8e8a); plant(2.2, -4.6, 1.6); plant(-1.6, -4.6, 1.2, 0x436066);
+plant(-5.4, 3.4, 1.35, 0xb5683a, "ficus"); plant(5.4, 4.0, 1.2, 0x6b8e8a, "snake"); plant(2.2, -4.6, 1.5, 0xb5683a, "monstera"); plant(-1.6, -4.6, 1.15, 0x436066, "spider");
 books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xea7720); jar(3.75, TOP + 0.03, -2.45, 0x436066);
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, std(0xf3ead6, { roughness: 0.9, bumpMap: retile(weave, 10, 12), bumpScale: 1 }), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04, scene, 0.008); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
