@@ -9,7 +9,7 @@ const { RoundedBoxGeometry, RoomEnvironment } = THREE;   // both are bundled ins
 
 const $ = (id) => document.getElementById(id);
 const TILE = 20;                                   // pixels per tile in the painting textures
-const INK = 0x1f090b, BRN = 0x571c0a, ORG = 0xea7720, SLATE = 0x436066, CREAM = 0xf5d4a8;
+const INK = 0x1f2240, BRN = 0x5b1f11, ORG = 0xb36633, SLATE = 0x5474a1, CREAM = 0xf4e4c8;
 
 // ---------- 1. RENDERER, SCENE, CAMERA ----------
 let renderer;
@@ -120,17 +120,17 @@ function lathe(profile, material, x, y, z, parent = scene) {          // a smoot
 
 // ---------- 3. THE STUDIO: a tall, bright artist's workshop ----------
 const EH = 3.3, RH = 6.4, Z_BACK = -5, Z_FRONT = 4.5, Z_MID = (Z_BACK + Z_FRONT) / 2;
-scene.background = new THREE.Color(0xbfd8d2);
+scene.background = new THREE.Color(0xd5dbe8);
 const pmrem = new THREE.PMREMGenerator(renderer);                  // soft, realistic ambient light and reflections
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const paleMaps = woodMaps([228, 198, 152], 10), beamMaps = woodMaps([64, 84, 90], 2), floorMaps = woodMaps([214, 168, 116], 6);
+const paleMaps = woodMaps([228, 198, 152], 10), beamMaps = woodMaps([50, 54, 89], 2), floorMaps = woodMaps([214, 168, 116], 6);
 const furnMaps = woodMaps([150, 100, 58], 4);
 const paleWood = std(0xffffff, { map: paleMaps.map, bumpMap: paleMaps.bump, bumpScale: 1.5, roughness: 0.7 });
 const beam = std(0xffffff, { map: beamMaps.map, bumpMap: beamMaps.bump, bumpScale: 1.2, roughness: 0.6 });
 const wood = std(0xffffff, { map: furnMaps.map, bumpMap: furnMaps.bump, bumpScale: 1.5, roughness: 0.55 });
 const dark = std(BRN, { roughness: 0.7 });
-const pl = plasterMaps([241, 225, 196]);
+const pl = plasterMaps([244, 228, 200]);
 const plasterShape = std(0xffffff, { map: retile(pl.map, 0.3, 0.3), bumpMap: retile(pl.bump, 0.3, 0.3), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
 const plasterPlane = std(0xffffff, { map: retile(pl.map, 3, 1), bumpMap: retile(pl.bump, 3, 1), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
 
@@ -218,10 +218,10 @@ box(0.2, 0.2, Z_FRONT - Z_BACK + 0.3, beam, 0, RH - 0.1, Z_MID);
 
 // the woven strip along the lower walls
 const stripTex = canvasTexture(144, 36, (g, w, h) => {
-  g.fillStyle = "#571c0a"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#5b1f11"; g.fillRect(0, 0, w, h);
   for (let x = 0; x < w; x += 36) {
-    g.fillStyle = "#ea7720"; g.beginPath(); g.moveTo(x + 18, 4); g.lineTo(x + 28, 18); g.lineTo(x + 18, 32); g.lineTo(x + 8, 18); g.fill();
-    g.fillStyle = "#436066"; g.fillRect(x, 15, 5, 6);
+    g.fillStyle = "#b36633"; g.beginPath(); g.moveTo(x + 18, 4); g.lineTo(x + 28, 18); g.lineTo(x + 18, 32); g.lineTo(x + 8, 18); g.fill();
+    g.fillStyle = "#5474a1"; g.fillRect(x, 15, 5, 6);
   }
 });
 function trim(len, x, z, ry) {
@@ -415,12 +415,12 @@ function ladder(x, z, ry, lean) {
   for (let i = 0; i < 7; i++) box(0.44, 0.035, 0.04, wood, 0, 0.35 + i * 0.36, 0, inner, 0.01);
   scene.add(g);
 }
-function books(x, y, z, n = 4) { const c = [0xc23b3b, 0x436066, 0xeeb04a, 0x2a8fa8, 0xea7720]; for (let i = 0; i < n; i++) box(0.26 - i * 0.01, 0.045, 0.19, std(c[i % 5], { roughness: 0.6 }), x, y + 0.0225 + i * 0.045, z).rotation.y = i * 0.25; }
+function books(x, y, z, n = 4) { const c = [0x9a2106, 0x5474a1, 0xe7ba80, 0x323659, 0xb36633]; for (let i = 0; i < n; i++) box(0.26 - i * 0.01, 0.045, 0.19, std(c[i % 5], { roughness: 0.6 }), x, y + 0.0225 + i * 0.045, z).rotation.y = i * 0.25; }
 function brushes(x, y, z) {
   lathe([[0, 0], [0.045, 0], [0.05, 0.13], [0.046, 0.13], [0.042, 0.01], [0, 0.01]], std(0xcfc2a8, { roughness: 0.5 }), x, y, z);
   for (let i = 0; i < 7; i++) {
     const b = cyl(0.006, 0.005, 0.28, std(0x6b3f1e, { roughness: 0.4 }), x + (i % 3 - 1) * 0.02, y + 0.21, z + (i % 2 - 0.5) * 0.03, scene, 8); b.rotation.z = (i - 3) * 0.08;
-    const tip = cyl(0.007, 0.002, 0.04, std(i % 2 ? 0xc23b3b : 0x2a2a2a, { roughness: 0.9 }), b.position.x + Math.sin(-b.rotation.z) * 0.15, y + 0.21 + 0.145, b.position.z, scene, 8); tip.rotation.z = b.rotation.z;
+    const tip = cyl(0.007, 0.002, 0.04, std(i % 2 ? 0x9a2106 : 0x2a2a2a, { roughness: 0.9 }), b.position.x + Math.sin(-b.rotation.z) * 0.15, y + 0.21 + 0.145, b.position.z, scene, 8); tip.rotation.z = b.rotation.z;
   }
 }
 function bowls(x, y, z, n = 3) {
@@ -446,7 +446,7 @@ function shelfUnit(x, z, ry) {
   [0.3, 0.9, 1.5, 2.1].forEach((y, i) => {
     box(1.25, 0.04, 0.35, wood, 0, y, 0, g, 0.01);
     for (let k = 0; k < 4; k++) {
-      const c = [0xea7720, 0x436066, 0xf5d4a8, 0xc23b3b, 0x2a8fa8][(i + k) % 5], px = -0.45 + k * 0.3;
+      const c = [0xb36633, 0x5474a1, 0xf4e4c8, 0x9a2106, 0x323659][(i + k) % 5], px = -0.45 + k * 0.3;
       if ((i + k) % 3 === 0) box(0.2, 0.18, 0.2, std(c, { roughness: 0.6 }), px, y + 0.11, 0, g, 0.02);
       else if ((i + k) % 3 === 1) { const m = glassJar(c); const l = lathe([[0, 0], [0.06, 0], [0.075, 0.015], [0.075, 0.13], [0.06, 0.15], [0.0, 0.15]], m, 0, 0, 0, g); l.position.set(px, y + 0.02, 0); }
       else lathe([[0, 0], [0.05, 0], [0.085, 0.07], [0.05, 0.17], [0.035, 0.22], [0.05, 0.25], [0.0, 0.25]], std(c, { roughness: 0.25 }), px, y + 0.02, 0, g);
@@ -456,29 +456,29 @@ function shelfUnit(x, z, ry) {
 }
 function sofa(x, z, ry) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
-  const fab = std(0x8fa593, { roughness: 1, bumpMap: retile(weave, 6, 3), bumpScale: 0.8 }), fab2 = std(0x7d9484, { roughness: 1, bumpMap: retile(weave, 6, 3), bumpScale: 0.8 });
+  const fab = std(0x7f98c0, { roughness: 1, bumpMap: retile(weave, 6, 3), bumpScale: 0.8 }), fab2 = std(0x6a85b0, { roughness: 1, bumpMap: retile(weave, 6, 3), bumpScale: 0.8 });
   box(1.95, 0.2, 0.9, wood, 0, 0.3, 0, g, 0.03); [-0.85, 0.85].forEach((a) => [-0.35, 0.35].forEach((b) => box(0.06, 0.2, 0.06, wood, a, 0.1, b, g, 0.015)));
   box(1.85, 0.2, 0.82, fab, 0, 0.49, 0.02, g, 0.08); box(1.85, 0.42, 0.2, fab2, 0, 0.78, -0.34, g, 0.08);
   box(0.2, 0.34, 0.82, fab2, -0.97, 0.66, 0.02, g, 0.07); box(0.2, 0.34, 0.82, fab2, 0.97, 0.66, 0.02, g, 0.07);
-  box(0.42, 0.4, 0.13, std(0xea7720, { roughness: 1, bumpMap: retile(weave, 3, 3), bumpScale: 1 }), -0.55, 0.78, -0.16, g, 0.05).rotation.x = -0.25;
-  box(0.4, 0.38, 0.13, std(0x436066, { roughness: 1, bumpMap: retile(weave, 3, 3), bumpScale: 1 }), 0.5, 0.76, -0.16, g, 0.05).rotation.x = -0.25;
+  box(0.42, 0.4, 0.13, std(0xb36633, { roughness: 1, bumpMap: retile(weave, 3, 3), bumpScale: 1 }), -0.55, 0.78, -0.16, g, 0.05).rotation.x = -0.25;
+  box(0.4, 0.38, 0.13, std(0x5474a1, { roughness: 1, bumpMap: retile(weave, 3, 3), bumpScale: 1 }), 0.5, 0.76, -0.16, g, 0.05).rotation.x = -0.25;
   scene.add(g); contact(x, z, 1.4, 2.5, 0.7);
 }
 function cabinet(x, z, ry) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
   box(1.4, 0.85, 0.9, std(0xc9ae86, { roughness: 0.5 }), 0, 0.425, 0, g, 0.015);
-  for (let i = 0; i < 5; i++) { box(1.3, 0.13, 0.02, std(0xa98a62, { roughness: 0.5 }), 0, 0.12 + i * 0.16, 0.46, g, 0.006); box(0.18, 0.02, 0.03, std(0x2c3e42, { metalness: 0.8, roughness: 0.3 }), 0, 0.12 + i * 0.16, 0.48, g, 0.008); }
+  for (let i = 0; i < 5; i++) { box(1.3, 0.13, 0.02, std(0xa98a62, { roughness: 0.5 }), 0, 0.12 + i * 0.16, 0.46, g, 0.006); box(0.18, 0.02, 0.03, std(0x2b2e4d, { metalness: 0.8, roughness: 0.3 }), 0, 0.12 + i * 0.16, 0.48, g, 0.008); }
   scene.add(g); contact(x, z, 1.2, 2.0, 0.6);
 }
 function floorLamp(x, z) {
-  cyl(0.15, 0.16, 0.03, std(0x2c3e42, { metalness: 0.6, roughness: 0.4 }), x, 0.015, z); cyl(0.012, 0.012, 1.5, std(0x2c3e42, { metalness: 0.6, roughness: 0.4 }), x, 0.78, z);
-  const shade = cyl(0.12, 0.2, 0.28, std(0xf5d4a8, { emissive: 0xf5d4a8, emissiveIntensity: 0.9, side: THREE.DoubleSide }), x, 1.65, z, scene, 32); shade.castShadow = false;
+  cyl(0.15, 0.16, 0.03, std(0x2b2e4d, { metalness: 0.6, roughness: 0.4 }), x, 0.015, z); cyl(0.012, 0.012, 1.5, std(0x2b2e4d, { metalness: 0.6, roughness: 0.4 }), x, 0.78, z);
+  const shade = cyl(0.12, 0.2, 0.28, std(0xf4e4c8, { emissive: 0xf4e4c8, emissiveIntensity: 0.9, side: THREE.DoubleSide }), x, 1.65, z, scene, 32); shade.castShadow = false;
   const l = new THREE.PointLight(0xffc880, 5, 6, 2); l.position.set(x, 1.6, z); scene.add(l);
 }
 function smallFrame(x, y, z, ry, w, h, seed) {          // painterly studies on the wall (not clickable)
   const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry;
   box(w + 0.08, h + 0.08, 0.04, std(0x3a2013, { roughness: 0.5 }), 0, 0, 0, g, 0.01);
-  const cols = ["#ea7720", "#436066", "#f5d4a8", "#c23b3b", "#2a8fa8", "#eeb04a", "#571c0a"];
+  const cols = ["#b36633", "#5474a1", "#f4e4c8", "#9a2106", "#323659", "#e7ba80", "#5b1f11"];
   const tex = canvasTexture(128, 128, (c, W, H) => {
     c.fillStyle = cols[seed % 7]; c.fillRect(0, 0, W, H);
     for (let i = 0; i < 7; i++) {
@@ -493,7 +493,7 @@ function smallFrame(x, y, z, ry, w, h, seed) {          // painterly studies on 
 function dropCloth(x, z, w, d) {                        // a paint-splattered cloth on the floor
   const tex = canvasTexture(256, 256, (g, W, H) => {
     g.fillStyle = "#e9dfc9"; g.fillRect(0, 0, W, H);
-    const cols = ["#ea7720", "#436066", "#c23b3b", "#eeb04a", "#2a8fa8", "#571c0a"];
+    const cols = ["#b36633", "#5474a1", "#9a2106", "#e7ba80", "#323659", "#5b1f11"];
     for (let i = 0; i < 38; i++) { g.fillStyle = cols[i % 6]; g.globalAlpha = 0.7; g.beginPath(); g.arc(hash(i, 1) * W, hash(2, i) * H, 1 + hash(i, 3) * 3.5, 0, 7); g.fill(); }
     g.lineCap = "round"; for (let i = 0; i < 7; i++) { g.strokeStyle = cols[(i * 2) % 6]; g.globalAlpha = 0.55; g.lineWidth = 2 + hash(i, 8) * 3; g.beginPath(); g.moveTo(hash(i, 5) * W, hash(5, i) * H); g.lineTo(hash(i, 5) * W + 30 + hash(i, 6) * 40, hash(5, i) * H + 10 + hash(6, i) * 30); g.stroke(); }
     g.globalAlpha = 1;
@@ -506,7 +506,7 @@ function palette(x, y, z) {                              // a wooden palette wit
   const hole = new THREE.Path(); hole.absellipse(-0.08, 0.03, 0.022, 0.016, 0, Math.PI * 2, false, 0); s.holes.push(hole);
   const m = new THREE.Mesh(new THREE.ExtrudeGeometry(s, { depth: 0.008, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 2, curveSegments: 24 }), std(0xc9a26a, { roughness: 0.4 }));
   m.rotation.x = -Math.PI / 2; m.position.set(x, y, z); m.rotation.z = 0.5; m.castShadow = true; scene.add(m);
-  [0xea7720, 0x436066, 0xc23b3b, 0xeeb04a, 0x2a8fa8].forEach((c, i) => { const d = sph(0.018, std(c, { roughness: 0.25 }), x + Math.cos(0.5 + i * 0.7) * 0.1, y + 0.012, z + Math.sin(0.5 + i * 0.7) * 0.075 * 1.1); d.scale.set(1, 0.5, 1); });
+  [0xb36633, 0x5474a1, 0x9a2106, 0xe7ba80, 0x323659].forEach((c, i) => { const d = sph(0.018, std(c, { roughness: 0.25 }), x + Math.cos(0.5 + i * 0.7) * 0.1, y + 0.012, z + Math.sin(0.5 + i * 0.7) * 0.075 * 1.1); d.scale.set(1, 0.5, 1); });
 }
 
 // easel (where the chosen painting stands) and the table with the tools
@@ -523,15 +523,20 @@ palette(TABLE_X - 0.05, TOP + 0.034, -2.45);
 // furnishing
 tableAt(-2.4, -1.1, 2.4, 0.95, 0.9);
 bowls(-3.2, 0.93, -1.2, 4); bowls(-1.5, 0.93, -0.9, 3); books(-2.4, 0.93, -1.3, 5); books(-3.0, 0.93, -0.8, 3);
-brushes(-2.0, 0.93, -1.2); brushes(-3.5, 0.93, -0.9); [0xea7720, 0x436066, 0xc23b3b, 0xeeb04a].forEach((c, i) => jar(-2.9 + i * 0.28, 0.93, -1.45, c));
+brushes(-2.0, 0.93, -1.2); brushes(-3.5, 0.93, -0.9); [0xb36633, 0x5474a1, 0x9a2106, 0xe7ba80].forEach((c, i) => jar(-2.9 + i * 0.28, 0.93, -1.45, c));
 vase(-1.2, 0.93, -1.3, 0xd9b58a); palette(-2.2, 0.96, -0.75);
 box(0.9, 0.012, 0.6, std(0xf3ead6, { roughness: 1 }), -2.4, 0.935, -0.45, scene, 0.004).rotation.y = 0.2;
 ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9);
+<<<<<<< HEAD
 plant(-5.4, 3.4, 1.35, 0xb5683a, "ficus"); plant(5.4, 4.0, 1.2, 0x6b8e8a, "snake"); plant(2.2, -4.6, 1.5, 0xb5683a, "monstera"); plant(-1.6, -4.6, 1.15, 0x436066, "spider");
 books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xea7720); jar(3.75, TOP + 0.03, -2.45, 0x436066);
+=======
+plant(-5.4, 3.4, 1.5); plant(5.4, 4.0, 1.3, 0x5474a1); plant(2.2, -4.6, 1.6); plant(-1.6, -4.6, 1.2, 0x5474a1);
+books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xb36633); jar(3.75, TOP + 0.03, -2.45, 0x5474a1);
+>>>>>>> 1d36063 (now working on test folder)
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, std(0xf3ead6, { roughness: 0.9, bumpMap: retile(weave, 10, 12), bumpScale: 1 }), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04, scene, 0.008); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
 smallFrame(-5.96, 1.6, 1.6, Math.PI / 2, 0.6, 0.45, 3); smallFrame(5.96, 2.3, 1.2, -Math.PI / 2, 0.5, 0.6, 4);
@@ -578,9 +583,9 @@ const tools = [sponge, knife, chalk];
 document.fonts.ready.then(() => {
   tools.forEach((t) => {
     const tex = canvasTexture(256, 64, (g, w, h) => {
-      g.fillStyle = "rgba(31,9,11,.85)"; g.fillRect(0, 0, w, h);
-      g.strokeStyle = "#ea7720"; g.lineWidth = 4; g.strokeRect(2, 2, w - 4, h - 4);
-      g.fillStyle = "#f5d4a8"; g.font = "700 26px Kufam, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillStyle = "rgba(31,34,64,.85)"; g.fillRect(0, 0, w, h);
+      g.strokeStyle = "#b36633"; g.lineWidth = 4; g.strokeRect(2, 2, w - 4, h - 4);
+      g.fillStyle = "#f4e4c8"; g.font = "700 26px Kufam, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
       g.fillText(t.userData.name, w / 2, h / 2 + 1);
     });
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
@@ -589,7 +594,7 @@ document.fonts.ready.then(() => {
   });
 });
 
-// ---------- 5. THE PAINTINGS: six canvases to choose from ----------
+// ---------- 5. THE PAINTINGS: eight mosaics to choose from ----------
 // On the wall a painting looks like a real painting (smooth). In the lab it becomes tiles, because that is what the convolution works on.
 function smoothTexture(key) {
   const img = Patterns[key], S = 16;
@@ -625,22 +630,29 @@ function makePainting(key, w, h, x, y, z = -4.93, tilt = 0, photo = null) {
   scene.add(g); interactive.push(g);
   return g;
 }
+// each frame has the same proportions as its picture, so no mosaic is stretched
+const A = "assets/mosaic_";
 const paintings = [
-  makePainting("mosaic", 1.3, 1.3, -4.7, 2.45, -4.93, 0, "assets/mosaic.jpg"),
-  makePainting("rug", 0.9, 1.35, -3.1, 2.4, -4.93, 0, "assets/rug.jpg"),
-  makePainting("swirl", 1.4, 1.4, 3.0, 2.45),
-  makePainting("sunrise", 1.6, 1.14, 4.9, 2.4),
-  makePainting("waves", 0.95, 0.95, -4.0, 0.62, -4.84, -0.1),     // leaning on the floor
-  makePainting("zigzag", 0.8, 1.2, 5.1, 0.72, -4.84, -0.1),
+  // left wall
+  makePainting("garden",   0.84, 1.5,  -5.43, 2.38, -4.93, 0, A + "garden.jpg"),
+  makePainting("dome",     0.99, 1.4,  -4.115, 2.38, -4.93, 0, A + "dome.jpg"),
+  makePainting("cliff",    0.84, 1.5,  -2.8,  2.38, -4.93, 0, A + "cliff.jpg"),
+  // right wall
+  makePainting("balcony",  1.07, 1.4,   2.785, 2.38, -4.93, 0, A + "balcony.jpg"),
+  makePainting("chapel",   0.84, 1.5,   4.04,  2.38, -4.93, 0, A + "chapel.jpg"),
+  makePainting("medallion",1.06, 1.35,  5.29,  2.38, -4.93, 0, A + "medallion.jpg"),
+  // leaning on the floor
+  makePainting("sunflower",   0.65, 1.15, -4.0, 0.62, -4.84, -0.1, A + "sunflower.jpg"),
+  makePainting("pomegranate", 0.65, 1.15, -0.9, 0.62, -4.84, -0.1, A + "pomegranate.jpg"),
 ];
-contact(-4.0, -4.6, 1.3, 0.6, 0.6); contact(5.1, -4.6, 1.2, 0.6, 0.6);
+contact(-4.0, -4.6, 1.3, 0.6, 0.6); contact(-0.9, -4.6, 1.2, 0.6, 0.6);
 
 // the glowing 3x3 frame, mirrored on the painting in 3D
 const kernelFrame = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
   map: canvasTexture(128, 128, (g, w, h) => {
-    g.shadowColor = "#ea7720"; g.shadowBlur = 14;
-    g.strokeStyle = "#1f090b"; g.lineWidth = 14; g.strokeRect(10, 10, w - 20, h - 20);
-    g.strokeStyle = "#f5d4a8"; g.lineWidth = 7; g.strokeRect(10, 10, w - 20, h - 20);
+    g.shadowColor = "#b36633"; g.shadowBlur = 14;
+    g.strokeStyle = "#1f2240"; g.lineWidth = 14; g.strokeRect(10, 10, w - 20, h - 20);
+    g.strokeStyle = "#f4e4c8"; g.lineWidth = 7; g.strokeRect(10, 10, w - 20, h - 20);
   }), transparent: true, depthWrite: false, toneMapped: false }));
 kernelFrame.visible = false; kernelFrame.renderOrder = 4;
 
