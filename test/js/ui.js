@@ -39,7 +39,7 @@
 
   const state = {
     tool: null,          // "sponge", "knife" or "chalk"
-    pattern: "mosaic",   // "mosaic" or "rug"
+    pattern: "medallion",   // a key of Patterns (see data.js)
     mode: "idle",        // "idle" (waiting), "auto" (plays by itself) or "step" (one tile per press)
     image: null,         // the current pattern: { cols, rows, pixels }
     result: [],          // autoplay: new colour of every tile, computed by the engine
@@ -148,7 +148,7 @@
   function weightColor(w, maxAbs) {
     if (w === 0) return "rgba(128,128,128,.18)";
     const strength = 0.25 + 0.75 * (Math.abs(w) / maxAbs);
-    return w > 0 ? "rgba(234,119,32," + strength + ")" : "rgba(67,96,102," + strength + ")";
+    return w > 0 ? "rgba(179,102,51," + strength + ")" : "rgba(84,116,161," + strength + ")";
   }
 
   function fillDetail() {

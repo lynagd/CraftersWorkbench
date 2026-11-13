@@ -16,10 +16,9 @@
 
   <!-- title screen -->
   <div class="intro" id="intro">
-    <h1>The Crafter’s <em>Workbench</em></h1>
-    <p class="lead">You are a painter. Step into your workshop, pick a painting and a tool, and see how a tool mixes what is under it.</p>
+    <h1>The Crafter’s <em>Workshop</em></h1>
+    <p class="lead">You are a crafter. Step into your workshop, pick any of your mosaic arts and a tool, and see what it does!</p>
     <button class="btn go" id="start">Enter the workshop ▸</button>
-    <p class="lbl">Drag to look around</p>
   </div>
 
   <!-- instruction shown while the learner explores the workshop -->
@@ -79,8 +78,8 @@
           <figure><div class="swatch" id="gResult"></div><figcaption>The new tile</figcaption></figure>
         </div>
         <p class="legend">
-          <span><i class="chip" style="background:#ea7720"></i>adds</span>
-          <span><i class="chip" style="background:#436066"></i>takes away</span>
+          <span><i class="chip" style="background:#b36633"></i>adds</span>
+          <span><i class="chip" style="background:#5474a1"></i>takes away</span>
           <span>Stronger colour: counts more</span>
           <span>Ringed tile: the one that changes</span>
         </p>
@@ -94,23 +93,22 @@
         <p id="rwhy"></p>
       </div>
 
-      <div class="row actions">
-        <button class="btn go" id="replay">↺ Replay</button>
-        <button class="btn" id="orig">Hold to compare</button>
-      </div>
-      <div class="nav">
-        <button class="link" id="another" type="button">← Put the tool back</button>
-        <button class="link" id="otherPainting" type="button">Another painting →</button>
+      <div class="row">
+        <button class="btn go" id="replay">Replay ↺</button>
+        <button class="btn" id="orig">Hold to see the original</button>
+        <button class="btn" id="another">Put the tool back</button>
+        <button class="btn" id="otherPainting">Choose another art</button>
       </div>
     </div>
   </aside>
 
-  <p class="no-gl" id="noGL" hidden>This browser can’t show the 3D workshop. <a href="classic.html">Open the simple version</a>.</p>
+  <p class="no-gl" id="noGL" hidden>The 3D workshop could not start (press F12 to see why). <a href="classic.html">Open the simple version</a>.</p>
 
   <!-- classic scripts first (engine, data, lab), then the 3D game as a module -->
   <script src="js/convolution.js"></script>
   <script src="js/data.js"></script>
   <script src="js/lab.js"></script>
-  <script type="module" src="js/game.js"></script>
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+  <script type="module" src="js/game.js" onerror="document.getElementById('noGL').hidden = false"></script>
 </body>
 </html>
