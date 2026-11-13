@@ -28,6 +28,8 @@ renderer.shadowMap.type = THREE.PCFShadowMap;     // blurred shadow edges (see s
 renderer.toneMapping = THREE.ACESFilmicToneMapping;   // film-like highlights and colours
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;   // richer contrast, no more washed-out colours
+renderer.toneMappingExposure = 0.95;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(INK);
@@ -273,6 +275,7 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
   const b = g.createLinearGradient(0, 0, w, 0); b.addColorStop(0, "rgba(0,0,0,1)"); b.addColorStop(0.5, "rgba(0,0,0,0)"); b.addColorStop(1, "rgba(0,0,0,1)");
   g.globalCompositeOperation = "destination-out"; g.fillStyle = b; g.fillRect(0, 0, w, h);
 });
+
 [-1.1, 0, 1.1].forEach((dx, i) => {
   const shaft = new THREE.Group();
   [0, Math.PI / 2].forEach((ry) => {
@@ -530,17 +533,20 @@ ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9);
-<<<<<<< HEAD
 plant(-5.4, 3.4, 1.35, 0xb5683a, "ficus"); plant(5.4, 4.0, 1.2, 0x6b8e8a, "snake"); plant(2.2, -4.6, 1.5, 0xb5683a, "monstera"); plant(-1.6, -4.6, 1.15, 0x436066, "spider");
 books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xea7720); jar(3.75, TOP + 0.03, -2.45, 0x436066);
-=======
-plant(-5.4, 3.4, 1.5); plant(5.4, 4.0, 1.3, 0x5474a1); plant(2.2, -4.6, 1.6); plant(-1.6, -4.6, 1.2, 0x5474a1);
-books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xb36633); jar(3.75, TOP + 0.03, -2.45, 0x5474a1);
->>>>>>> 1d36063 (now working on test folder)
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, std(0xf3ead6, { roughness: 0.9, bumpMap: retile(weave, 10, 12), bumpScale: 1 }), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04, scene, 0.008); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
 smallFrame(-5.96, 1.6, 1.6, Math.PI / 2, 0.6, 0.45, 3); smallFrame(5.96, 2.3, 1.2, -Math.PI / 2, 0.5, 0.6, 4);
 smallFrame(5.96, 1.8, 2.4, -Math.PI / 2, 0.55, 0.4, 5); smallFrame(5.96, 2.5, -0.4, -Math.PI / 2, 0.45, 0.45, 6);
+// soft contact shadows under the big pieces
+contact(-2.4, -1.1, 3.0, 1.5);            // big work table
+contact(3.1, -2.2, 2.4, 1.4);             // tool table
+contact(0.5, -2.3, 1.3, 1.0);             // easel
+contact(4.5, 2.4, 1.3, 2.4);              // sofa
+contact(-4.9, 1.9, 1.4, 1.9);             // cabinet
+contact(5.75, -1.4, 0.8, 1.9); contact(-5.75, -3.0, 0.8, 1.9);   // shelves
+contact(-0.9, -0.2, 0.6, 0.6); contact(1.8, -0.9, 0.6, 0.6);     // stools
 
 const interactive = [];       // everything the learner can click: paintings and tools
 

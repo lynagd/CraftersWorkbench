@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The Crafter’s Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kufam:wght@500;700&family=Cairo:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styletest.css">
+</head>
+<body>
+
+  <!-- PAGE 1: welcome -->
+  <section id="hello" class="hero">
+    <div class="hero-text">
+      <h1>The Crafter’s <em>Workbench</em></h1>
+      <p class="lead">See how one small tool, slid over a pattern, can soften it, sharpen it or trace its edges.</p>
+      <button class="btn go big" id="start">Start ▶</button>
+    </div>
+    <div class="pics">
+      <img src="assets/rug.jpg" alt="Persian rug pattern">
+      <img src="assets/mosaic.jpg" alt="Moroccan mosaic">
+    </div>
+  </section>
+
+  <!-- PAGE 2: pick a tool -->
+  <section id="options" hidden>
+    <h2>Pick a tool</h2>
+    <p class="lead">Each one works on the same canvas.</p>
+    <div class="opts">
+      <button class="opt" data-t="sponge">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="13" width="34" height="23" rx="7"/><circle cx="17" cy="22" r="2"/><circle cx="29" cy="26" r="2"/><circle cx="24" cy="20" r="1.5"/></svg>
+        <b>Water Sponge</b><span>Melts colours together</span>
+      </button>
+      <button class="opt" data-t="knife">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 42l12-12"/><path d="M18 30L34 8l8 8-20 18z"/></svg>
+        <b>Palette Knife</b><span>Makes colours pop</span>
+      </button>
+      <button class="opt" data-t="chalk">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="17" y="5" width="13" height="30" rx="3" transform="rotate(25 24 20)"/><path d="M8 43h32"/></svg>
+        <b>Edge Chalk</b><span>Marks where colours meet</span>
+      </button>
+    </div>
+    <button class="btn sm" id="backHello">← Back</button>
+  </section>
+
+  <!-- PAGE 3: tile by tile -->
+  <section id="learn" hidden>
+    <div class="with-tool" hidden>
+      <div class="card"><h3 data-tname></h3><p data-twhat></p></div>
+
+      <div class="row">
+        <button class="btn" data-c="mosaic" aria-pressed="true">Moroccan mosaic</button>
+        <button class="btn" data-c="rug" aria-pressed="false">Persian rug</button>
+      </div>
+
+      <div class="pair">
+        <figure>
+          <div class="wrap" id="wrapA">
+            <canvas id="cvA" aria-label="Original canvas"></canvas>
+            <div class="win" id="winA" hidden></div>
+          </div>
+          <figcaption>The original canvas</figcaption>
+        </figure>
+        <span class="arrow" aria-hidden="true">➜</span>
+        <figure>
+          <div class="wrap" id="wrapB">
+            <canvas id="cvB" aria-label="Result canvas"></canvas>
+            <div class="win one" id="winB" hidden></div>
+          </div>
+          <figcaption>What the tool makes</figcaption>
+        </figure>
+      </div>
+
+      <div class="steps">
+        <span>1. The glow covers 9 tiles</span>
+        <span>2. The tool mixes them</span>
+        <span>3. The middle tile changes</span>
+      </div>
+
+      <p class="count" id="count" aria-live="polite"></p>
+      <p class="note" id="edge"></p>
+
+      <div class="row">
+        <button class="btn big" id="next">Next tile ▶</button>
+        <button class="btn sm" id="restart">Start again ↺</button>
+      </div>
+
+      <div class="row">
+        <button class="btn go" id="play">Play ▶</button>
+        <button class="btn sm" id="more">More detail</button>
+      </div>
+      <div class="row">
+        <button class="btn sm toOpts">← Change tool</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- PAGE 4: why it works (no maths) -->
+  <section id="detail" hidden>
+    <div class="with-tool" hidden>
+      <h2>How the <span data-tname></span> decides</h2>
+      <p class="lead">We look at one tile. Drag each cup onto the empty tile and watch it pour. You can pour them in any order: the final colour is always the same.</p>
+
+      <div class="how">
+        <figure>
+          <h3><span class="num">1</span> Look</h3>
+          <div class="g3" id="dTiles"></div>
+          <figcaption>The 9 tiles under the glowing frame. The middle one is the one that will change.</figcaption>
+        </figure>
+        <span class="op" aria-hidden="true">➜</span>
+        <figure>
+          <h3><span class="num">2</span> Give each a say</h3>
+          <div class="g3" id="dCups"></div>
+          <figcaption>One cup per tile. The fuller the cup, the more that tile counts. Drag a cup onto the empty tile.</figcaption>
+        </figure>
+        <span class="op" aria-hidden="true">➜</span>
+        <figure>
+          <h3><span class="num">3</span> Pour</h3>
+          <div class="out empty" id="dOut"></div>
+          <p class="count" id="dCount" aria-live="polite"></p>
+          <button class="btn sm" id="dRestart" disabled>Start again ↺</button>
+        </figure>
+      </div>
+
+      <div class="legend">
+        <span><i class="sw add"></i> pours this colour in</span>
+        <span><i class="sw take"></i> scoops this colour out</span>
+        <span><i class="sw none"></i> not used</span>
+      </div>
+
+      <div class="card"><p id="dWhy"></p></div>
+      <p class="note" id="dEdge"></p>
+      <p class="fin" id="dDone" aria-live="polite"></p>
+
+      <div class="row">
+        <button class="btn" id="dBack">← Back to tile by tile</button>
+        <button class="btn go" id="dPlay">Play ▶</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- PAGE 5: the full simulation -->
+  <section id="stage" hidden>
+    <div class="with-tool" hidden>
+      <div class="card"><h3 data-tname></h3><p data-twhat></p></div>
+
+      <div class="row">
+        <button class="btn" data-c="mosaic" aria-pressed="true">Moroccan mosaic</button>
+        <button class="btn" data-c="rug" aria-pressed="false">Persian rug</button>
+      </div>
+
+      <div class="wrap" id="wrap">
+        <canvas id="cv" aria-label="Canvas"></canvas>
+        <div class="win" id="win" hidden></div>
+      </div>
+
+      <div class="steps">
+        <span>1. The glow covers 9 tiles</span>
+        <span>2. The tool mixes them</span>
+        <span>3. The middle tile changes</span>
+      </div>
+
+      <p class="fin" id="fin" aria-live="polite"></p>
+
+      <div class="row">
+        <button class="btn go" id="replay">Replay ↺</button>
+        <button class="btn" id="orig">Hold to see the original</button>
+      </div>
+      <div class="row">
+        <button class="btn sm" id="backLearn">← Tile by tile</button>
+        <button class="btn sm" id="another">Try another tool</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- the order matters: engine, then data, then the interface that uses both -->
+  <script src="js/convolutiontest.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/uitest.js"></script>
+</body>
+</html>

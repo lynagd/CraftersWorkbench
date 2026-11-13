@@ -112,8 +112,19 @@
   }
 
   function setMoreLabel(open) {
-    $("more").setAttribute("aria-expanded", String(open));
-    $("more").textContent = open ? "Hide detail ▴" : "Want more detail? ▾";
+    const b = $("more"), tip = open ? "Hide details" : "More details";
+    b.setAttribute("aria-expanded", String(open));
+    b.setAttribute("aria-label", tip);
+    b.dataset.tip = tip;                    // the CSS shows this text in the hover bubble
+  }
+
+  // Show the "?" icon, with one pulse the first time it appears
+  function showMore() {
+    const b = $("more");
+    if (!b.hidden) return;
+    setMoreLabel(false);
+    b.hidden = false;
+    if (!reduceMotion) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
   }
 
   // Prepare a pattern on the canvas (without starting anything)
@@ -175,8 +186,7 @@
     frame.hidden = true;
     $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
     state.inspect = null; // the card will explain the middle tile
-    setMoreLabel(false);
-    $("more").hidden = false;
+    showMore();
   }
 
   // Slide the frame over every tile, row by row, changing each tile in place
@@ -228,7 +238,7 @@
     state.stepIndex = i + 1;
     state.inspect = { x, y };
     $("fin").textContent = STEP_HINT;
-    if ($("more").hidden) { setMoreLabel(false); $("more").hidden = false; }
+    showMore();
     if (!$("real").hidden) fillDetail(); // keep the open card in sync with the frame
 
     if (state.stepIndex >= total) {
