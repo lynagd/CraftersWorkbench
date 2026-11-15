@@ -158,3 +158,5 @@ body.game { overflow: hidden; background: var(--ink); }
 body.game::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
   background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(31, 34, 64, .38) 100%); }
 .intro, .hud, .lab { z-index: 2; }
+/* in the workshop the tool itself works on the painting, so the panel only draws a plain outline (no glow) */
+.lab .win, .lab .mark { box-shadow: none; outline: 3px solid var(--gold); outline-offset: -1px; }

@@ -12,12 +12,12 @@
 <body class="game">
 
   <!-- the 3D workshop is drawn here by js/game.js -->
-  <canvas id="scene" aria-label="The painter’s workshop"></canvas>
+  <canvas id="scene" aria-label="The crafter’s workshop"></canvas>
 
   <!-- title screen -->
   <div class="intro" id="intro">
     <h1>The Crafter’s <em>Workshop</em></h1>
-    <p class="lead">You are a crafter. Step into your workshop, pick any of your mosaic arts and a tool, and see what it does!</p>
+    <p class="lead">You are a crafter. Step into your workshop, pick one of your mosaic arts and a tool, and see what it does!!</p>
     <button class="btn go" id="start">Enter the workshop ▸</button>
   </div>
 
@@ -31,7 +31,8 @@
 
       <!-- how the learner wants to watch: by itself, or one tile at a time -->
       <div class="row" role="group" aria-label="Mode">
-        <button class="btn" data-m="auto" aria-pressed="true">Autoplay</button>
+        <button class="btn" data-m="free" aria-pressed="true">Try it yourself</button>
+        <button class="btn" data-m="auto" aria-pressed="false">Autoplay</button>
         <button class="btn" data-m="step" aria-pressed="false">Step by step</button>
       </div>
 
@@ -58,16 +59,14 @@
       </div>
 
       <div class="steps">
-        <span>1. The glow covers 9 tiles</span>
+        <span>1. The tool covers 9 tiles</span>
         <span>2. The tool mixes them</span>
         <span>3. The middle tile changes</span>
       </div>
 
-      <div class="finrow">
-        <p class="fin" id="fin" aria-live="polite"></p>
-        <button class="help" id="more" type="button" hidden aria-expanded="false" aria-controls="real" aria-label="More details" data-tip="More details">?</button>
-      </div>
+      <p class="fin" id="fin" aria-live="polite"></p>
 
+      <button class="btn" id="more" hidden aria-expanded="false" aria-controls="real">Want more detail? ▾</button>
       <div class="card real" id="real" hidden>
         <h3>In real convolution terms</h3>
         <div class="demo3">
@@ -84,7 +83,7 @@
           <span>Ringed tile: the one that changes</span>
         </p>
         <ul class="terms">
-          <li><b>Glowing frame</b> = the <b>kernel</b>, a small filter that slides over the image</li>
+          <li><b>The tool's reach</b> (9 tiles) = the <b>kernel</b>, a small filter that slides over the image</li>
           <li><b>Tiles inside it</b> = the <b>pixels</b> under the kernel</li>
           <li><b>Your tool</b> = the <b>weights</b> (the colours). Each pixel is multiplied by its weight, then all the results are added up</li>
           <li><b>Ringed tile</b> = the <b>output pixel</b>, the one that changes</li>
@@ -97,7 +96,7 @@
         <button class="btn go" id="replay">Replay ↺</button>
         <button class="btn" id="orig">Hold to see the original</button>
         <button class="btn" id="another">Put the tool back</button>
-        <button class="btn" id="otherPainting">Choose another art</button>
+        <button class="btn" id="otherPainting">Choose another painting</button>
       </div>
     </div>
   </aside>
@@ -108,7 +107,7 @@
   <script src="js/convolution.js"></script>
   <script src="js/data.js"></script>
   <script src="js/lab.js"></script>
-  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }</script>
   <script type="module" src="js/game.js" onerror="document.getElementById('noGL').hidden = false"></script>
 </body>
 </html>

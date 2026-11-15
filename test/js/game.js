@@ -1,10 +1,17 @@
 // js/game.js
 // The 3D workshop. The learner is the painter: first-person view, drag to look around.
-// Flow: title -> pick a painting (it moves to the easel) -> pick a tool (it goes into the hand)
+// Flow: title -> pick a painting (it moves to the easel) -> pick a tool, then use the cursor on the painting
 //       -> the lab opens (lab.js) and the convolution plays on the painting itself.
 // Needs: Patterns (data.js) and Lab (lab.js), which are loaded before this module.
 
 import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 const { RoundedBoxGeometry, RoomEnvironment } = THREE;   // both are bundled inside vendor/three.module.min.js
 
 const $ = (id) => document.getElementById(id);
@@ -24,20 +31,20 @@ const maxPixelRatio = Math.min(window.devicePixelRatio, mobile ? 1.5 : 2);
 let pixelRatio = maxPixelRatio;
 renderer.setPixelRatio(pixelRatio);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;     // blurred shadow edges (see sun.shadow.radius)
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // soft, natural shadow edges
 renderer.toneMapping = THREE.ACESFilmicToneMapping;   // film-like highlights and colours
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 0.8;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;   // richer contrast, no more washed-out colours
-renderer.toneMappingExposure = 0.95;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(INK);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 60);
 scene.add(camera);
 
+let composer = null;                    // the post-processing chain (see section 7)
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
+  if (composer) composer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -79,24 +86,58 @@ function canvasTexture(w, h, draw, repeat) {            // a texture drawn with 
 }
 const retile = (t, rx, ry) => { const c = t.clone(); c.repeat.set(rx, ry); c.wrapS = c.wrapT = THREE.RepeatWrapping; c.needsUpdate = true; return c; };
 
-function woodMaps(base, planks = 6) {                    // wood grain: colour + bump
-  const S = 512, pw = S / planks;
-  const shade = (x, y) => {
-    const p = Math.floor(x / pw), lx = x - p * pw;
-    const grain = 0.5 + 0.5 * Math.sin(lx * 0.32 + fbm(lx * 0.025 + p * 5.1, y * 0.004 + p) * 10);
-    return (0.74 + 0.26 * grain + (hash(p, 3) - 0.5) * 0.14) * (lx < 2 || lx > pw - 2 ? 0.55 : 1);
-  };
-  return {
-    map: pixelTexture(S, S, (x, y) => { const s = shade(x, y); return [base[0] * s, base[1] * s, base[2] * s]; }),
-    bump: pixelTexture(S, S, (x, y) => { const s = shade(x, y) * 255; return [s, s, s]; }, null, false),
-  };
+// Realistic surfaces. Each one is made from a single height field, so the colour, the normal map (the tiny
+// bumps that catch the light) and the roughness map (shiny or matt) all agree with each other. They tile seamlessly.
+const LATTICE = (() => { const a = new Float32Array(256 * 256); let q = 987654321; for (let i = 0; i < a.length; i++) { q = (Math.imul(q, 1664525) + 1013904223) >>> 0; a[i] = q / 4294967296; } return a; })();
+function tnoise(x, y, px, py) {                           // smooth value noise that repeats every px by py cells
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const x0 = ((xi % px) + px) % px, x1 = (x0 + 1) % px, y0 = ((yi % py) + py) % py, y1 = (y0 + 1) % py;
+  const a = LATTICE[(y0 & 255) * 256 + (x0 & 255)], b = LATTICE[(y0 & 255) * 256 + (x1 & 255)], c = LATTICE[(y1 & 255) * 256 + (x0 & 255)], d = LATTICE[(y1 & 255) * 256 + (x1 & 255)];
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
-function plasterMaps(base) {                             // mottled plaster: colour + bump
-  const S = 256;
-  return {
-    map: pixelTexture(S, S, (x, y) => { const s = 0.92 + 0.12 * fbm(x * 0.04, y * 0.04) + 0.02 * hash(x, y); return [base[0] * s, base[1] * s, base[2] * s]; }),
-    bump: pixelTexture(S, S, (x, y) => { const s = fbm(x * 0.09, y * 0.09) * 255; return [s, s, s]; }, null, false),
-  };
+function surfaceTextures(S, fn, strength) {               // fn(x, y, i, H, T, R) fills height, tone and roughness for pixel i
+  const H = new Float32Array(S * S), T = new Float32Array(S * S), R = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) fn(x, y, y * S + x, H, T, R);
+  const mk = () => { const c = document.createElement("canvas"); c.width = c.height = S; const g = c.getContext("2d"); return [c, g, g.createImageData(S, S)]; };
+  const [cc, cg, cd] = mk(), [nc, ng, nd] = mk(), [rc, rg, rd] = mk();
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = y * S + x, l = H[y * S + ((x - 1 + S) % S)], r = H[y * S + ((x + 1) % S)], u = H[((y - 1 + S) % S) * S + x], d = H[((y + 1) % S) * S + x];
+    let nx = (l - r) * strength, ny = (d - u) * strength; const len = Math.hypot(nx, ny, 1); nx /= len; ny /= len; const nz = 1 / len;
+    const t = Math.max(0, Math.min(1, T[i])) * 255, k = i * 4;
+    cd.data[k] = t; cd.data[k + 1] = t * 0.985; cd.data[k + 2] = t * 0.96; cd.data[k + 3] = 255;
+    nd.data[k] = (nx * 0.5 + 0.5) * 255; nd.data[k + 1] = (ny * 0.5 + 0.5) * 255; nd.data[k + 2] = (nz * 0.5 + 0.5) * 255; nd.data[k + 3] = 255;
+    const ro = Math.max(0, Math.min(1, R[i])) * 255; rd.data[k] = ro; rd.data[k + 1] = ro; rd.data[k + 2] = ro; rd.data[k + 3] = 255;
+  }
+  cg.putImageData(cd, 0, 0); ng.putImageData(nd, 0, 0); rg.putImageData(rd, 0, 0);
+  const tex = (c, srgb) => { const t = new THREE.CanvasTexture(c); t.colorSpace = srgb ? SRGB : THREE.NoColorSpace; t.anisotropy = 16; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+  return { map: tex(cc, true), normal: tex(nc, false), rough: tex(rc, false) };
+}
+const WOOD_S = 1024;
+const woodSet = surfaceTextures(WOOD_S, (x, y, i, H, T, R) => {          // 4 boards across, each cut in two lengths, with grain, pores and seams
+  const S = WOOD_S, P = 256, p = (x / P) | 0, lx = x - p * P, seam = Math.floor(hash(p, 7) * S);
+  const half = ((y - seam + S) % S) < S / 2 ? 0 : 1, id = p * 2 + half, ph = hash(id, 1) * 60, tone0 = 0.93 + 0.14 * hash(id, 2);
+  const N = (cx, cy) => tnoise((x / S) * cx, (y / S) * cy, cx, cy);
+  const warp = (N(6, 3) * 2 - 1) * 7 + (N(12, 6) * 2 - 1) * 2.2 + (N(3, 2) * 2 - 1) * 4;
+  const ring = 0.5 + 0.5 * Math.sin(lx * 0.19 + warp + ph), ringS = ring * ring * (3 - 2 * ring);
+  const streak = N(200, 5), pores = N(256, 64);
+  const edge = Math.min(lx, P - 1 - lx), ey = Math.min(((y - seam + S) % S), S - ((y - seam + S) % S), ((y - seam - S / 2 + 2 * S) % S), S - ((y - seam - S / 2 + 2 * S) % S));
+  const groove = Math.max(edge < 3 ? (3 - edge) / 3 : 0, ey < 2 ? (2 - ey) / 2 : 0);
+  H[i] = 0.5 + 0.13 * ringS + 0.09 * streak + 0.04 * pores - 0.6 * groove;
+  T[i] = tone0 * (0.66 + 0.24 * ringS + 0.16 * streak + 0.06 * pores) * (1 - 0.65 * groove);
+  R[i] = 0.58 + 0.2 * (1 - ringS) + 0.1 * streak + 0.3 * groove;
+}, 6);
+const PLASTER_S = 1024;
+const plasterSet = surfaceTextures(PLASTER_S, (x, y, i, H, T, R) => {    // hand-troweled lime plaster: soft undulation plus fine grain
+  const S = PLASTER_S, N = (c) => tnoise((x / S) * c, (y / S) * c, c, c);
+  const a = N(6), b = N(24), c = N(96), d = N(256);
+  H[i] = 0.25 * a + 0.3 * b + 0.3 * c + 0.15 * d;
+  T[i] = 0.93 + 0.12 * (a - 0.5) + 0.06 * (b - 0.5) + 0.04 * (d - 0.5);
+  R[i] = 0.9 + 0.1 * d;
+}, 9);
+function surfMat(set, color, o = {}, repeat = [1, 1], rotation = 0, physical = false) {
+  const t = (src) => { const c = src.clone(); c.repeat.set(repeat[0], repeat[1]); c.rotation = rotation; c.center.set(0.5, 0.5); c.needsUpdate = true; return c; };
+  const M = physical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+  return new M({ color, map: t(set.map), normalMap: t(set.normal), roughnessMap: t(set.rough), roughness: 1, metalness: 0, envMapIntensity: 0.9, ...o });
 }
 const weave = pixelTexture(64, 64, (x, y) => { const v = ((x >> 1) + (y >> 1)) % 2 ? 190 : 110, n = hash(x, y) * 30; return [v + n, v + n, v + n]; }, [1, 1], false);   // canvas / fabric weave
 
@@ -126,59 +167,19 @@ scene.background = new THREE.Color(0xd5dbe8);
 const pmrem = new THREE.PMREMGenerator(renderer);                  // soft, realistic ambient light and reflections
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const paleMaps = woodMaps([228, 198, 152], 10), beamMaps = woodMaps([50, 54, 89], 2), floorMaps = woodMaps([214, 168, 116], 6);
-const furnMaps = woodMaps([150, 100, 58], 4);
-const paleWood = std(0xffffff, { map: paleMaps.map, bumpMap: paleMaps.bump, bumpScale: 1.5, roughness: 0.7 });
-const beam = std(0xffffff, { map: beamMaps.map, bumpMap: beamMaps.bump, bumpScale: 1.2, roughness: 0.6 });
-const wood = std(0xffffff, { map: furnMaps.map, bumpMap: furnMaps.bump, bumpScale: 1.5, roughness: 0.55 });
+const HALF_TURN = Math.PI / 2;                                    // beams and planks: the grain runs along the length
+const paleWood = surfMat(woodSet, 0xe4c698, {}, [10, 4.3], HALF_TURN);
+const beam = surfMat(woodSet, 0x3a3f6a, { roughness: 0.8 }, [0.25, 7.5], HALF_TURN);   // dark navy-stained oak
+const wood = surfMat(woodSet, 0x9a6a3c, {}, [1, 1], 0, true);
+Object.assign(wood, { clearcoat: 0.25, clearcoatRoughness: 0.35 });
 const dark = std(BRN, { roughness: 0.7 });
-const pl = plasterMaps([244, 228, 200]);
-const plasterShape = std(0xffffff, { map: retile(pl.map, 0.3, 0.3), bumpMap: retile(pl.bump, 0.3, 0.3), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
-const plasterPlane = std(0xffffff, { map: retile(pl.map, 3, 1), bumpMap: retile(pl.bump, 3, 1), bumpScale: 0.6, roughness: 1, side: THREE.DoubleSide });
+const plasterShape = surfMat(plasterSet, 0xf4e4c8, { side: THREE.DoubleSide, normalScale: new THREE.Vector2(0.6, 0.6) }, [0.5, 0.5]);
+const plasterPlane = surfMat(plasterSet, 0xf4e4c8, { side: THREE.DoubleSide, normalScale: new THREE.Vector2(0.6, 0.6) }, [4.75, 1.65]);
 
-// floor: real wooden boards, and the real Persian rug
-// colour + bump canvases computed pixel by pixel: fn(x, y) -> { c: [r,g,b], h: 0..1 }
-function pixelMaps(w, h, fn, repeat) {
-  const mk = () => { const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); return [c, g, g.createImageData(w, h)]; };
-  const [cc, cg, cd] = mk(), [bc, bg, bd] = mk();
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const o = fn(x, y), i = (y * w + x) * 4, k = Math.round(o.h * 255);
-    cd.data[i] = o.c[0]; cd.data[i + 1] = o.c[1]; cd.data[i + 2] = o.c[2]; cd.data[i + 3] = 255;
-    bd.data[i] = bd.data[i + 1] = bd.data[i + 2] = k; bd.data[i + 3] = 255;
-  }
-  cg.putImageData(cd, 0, 0); bg.putImageData(bd, 0, 0);
-  const wrap = (cv, srgb) => {
-    const t = new THREE.CanvasTexture(cv); if (srgb) t.colorSpace = SRGB; t.anisotropy = 8;
-    t.wrapS = t.wrapT = THREE.RepeatWrapping; if (repeat) t.repeat.set(repeat[0], repeat[1]); return t;
-  };
-  return { map: wrap(cc, true), bump: wrap(bc, false) };
-}
-
-// Real wooden boards: 8 boards across, two staggered board lengths per tile, each with its own tone,
-// grain, a few knots, dark gaps between boards and soft bevelled edges.
-const boardMaps = pixelMaps(512, 1024, (x, y) => {
-  const PW = 64, SEG = 512;
-  const p = Math.floor(x / PW), lx = x - p * PW;
-  const yy = (y + Math.floor(hash(p, 7) * SEG)) % 1024, seg = Math.floor(yy / SEG), ly = yy - seg * SEG;
-  const b = p * 2 + seg + 1;                                        // board id
-  const tone = hash(b, 1), warm = hash(b, 2);
-  const base = [198 + 36 * tone + 8 * warm, 142 + 34 * tone, 92 + 26 * tone - 6 * warm];
-  const n = fbm(lx * 0.09 + b * 7.3, ly * 0.012 + b * 3.1);
-  let rings = 0.5 + 0.5 * Math.sin(lx * 0.34 + n * 14 + hash(b, 5) * 6.28);
-  const pores = vnoise(lx * 0.9 + b * 13, ly * 0.05);
-  let shade = 0.80 + 0.12 * rings + 0.14 * (pores - 0.5) + 0.12 * (n - 0.5);
-  if (hash(b, 9) > 0.72) {                                          // a knot on some boards
-    const kx = 14 + hash(b, 10) * 36, ky = 60 + hash(b, 11) * 390, r = Math.hypot(lx - kx, (ly - ky) * 0.45);
-    if (r < 11) { shade *= 0.62 + 0.38 * smooth(r / 11) + 0.08 * Math.sin(r * 1.7); rings = 0.3; }
-  }
-  const d = Math.min(lx, PW - 1 - lx), e = Math.min(ly, SEG - 1 - ly);
-  const gap = Math.min(smooth(Math.min(1, d / 2.2)), smooth(Math.min(1, e / 2.2)));   // 0 in the crack, 1 on the board
-  shade *= 0.35 + 0.65 * gap;
-  const hgt = 0.12 + 0.88 * gap;
-  return { c: [base[0] * shade, base[1] * shade, base[2] * shade], h: Math.max(0, Math.min(1, hgt * (0.9 + 0.1 * rings))) };
-}, [8, 3]);
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5),
-  std(0xffffff, { map: boardMaps.map, bumpMap: boardMaps.bump, bumpScale: 1.6, roughness: 0.55 }));
+// floor boards with grain, and the real Persian rug
+const floorMat = surfMat(woodSet, 0xc4905a, { envMapIntensity: 0.7 }, [15, 5.9], 0, true);   // boards 20 cm wide, varnished
+Object.assign(floorMat, { clearcoat: 0.4, clearcoatRoughness: 0.3 });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 9.5), floorMat);
 floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, Z_MID); floor.receiveShadow = true; scene.add(floor);
 new THREE.TextureLoader().load("assets/rug.jpg", (t) => {
   t.colorSpace = SRGB; t.anisotropy = 8;
@@ -193,7 +194,7 @@ const contactTex = canvasTexture(128, 128, (g) => {
 });
 function contact(x, z, w, d, o = 1) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ map: contactTex, transparent: true, opacity: o, depthWrite: false }));
-  m.rotation.x = -Math.PI / 2; m.position.set(x, 0.006, z); m.renderOrder = 1; scene.add(m);
+  m.rotation.x = -Math.PI / 2; m.position.set(x, 0.006, z); m.renderOrder = 1; m.userData.noAO = true; scene.add(m);
 }
 
 // walls, roof, beams
@@ -218,23 +219,24 @@ const ang = Math.atan2(RH - EH, 6), slope = Math.hypot(6, RH - EH), roofY = (EH 
 for (let z = -4.6; z <= 4.2; z += 1.4) box(12, 0.18, 0.14, beam, 0, EH + 0.2, z, scene, 0.02);
 box(0.2, 0.2, Z_FRONT - Z_BACK + 0.3, beam, 0, RH - 0.1, Z_MID);
 
-// the woven strip along the lower walls
-const stripTex = canvasTexture(144, 36, (g, w, h) => {
-  g.fillStyle = "#5b1f11"; g.fillRect(0, 0, w, h);
-  for (let x = 0; x < w; x += 36) {
-    g.fillStyle = "#b36633"; g.beginPath(); g.moveTo(x + 18, 4); g.lineTo(x + 28, 18); g.lineTo(x + 18, 32); g.lineTo(x + 8, 18); g.fill();
-    g.fillStyle = "#5474a1"; g.fillRect(x, 15, 5, 6);
-  }
-});
+// the band of tiles along the lower walls: the same strip as on the presentation slides
+const STRIP_H = 0.15;
+const stripMats = [];
 function trim(len, x, z, ry) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
   box(len, 0.9, 0.06, dark, 0, 0.45, 0.03, g, 0.01);
   const rail = box(len, 0.05, 0.09, wood, 0, 0.92, 0.04, g, 0.01);
-  const strip = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.12), std(0xffffff, { map: retile(stripTex, len / 1.2, 1) })); strip.position.set(0, 1.0, 0.065); g.add(strip);
+  const mat = std(0xffffff, { roughness: 0.55 }); stripMats.push([mat, len]);          // the picture is loaded just below
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(len, STRIP_H), mat); strip.position.set(0, 1.03, 0.115); g.add(strip);   // in front of the window frame, so the band runs unbroken along the wall
   box(len, 0.12, 0.08, wood, 0, 0.06, 0.04, g, 0.01);   // skirting board
   scene.add(g);
 }
 trim(12, 0, Z_BACK, 0); trim(9.5, -6, Z_MID, Math.PI / 2); trim(9.5, 6, Z_MID, -Math.PI / 2);
+new THREE.TextureLoader().load("assets/tile_strip.png", (t) => {
+  t.colorSpace = SRGB; t.anisotropy = 8;
+  const repeatLength = STRIP_H * (t.image.width / t.image.height);                      // how long one copy of the strip is on the wall
+  stripMats.forEach(([m, len]) => { m.map = retile(t, len / repeatLength, 1); m.needsUpdate = true; });
+});
 
 // the big window: slate-blue frame with mullions, and a forest outside
 [-1.9, -0.95, 0.95, 1.9].forEach((x) => box(0.07, 3.5, 0.12, beam, x, 2.65, Z_BACK + 0.04, scene, 0.015));
@@ -242,29 +244,30 @@ box(0.07, 4.6, 0.12, beam, 0, 3.2, Z_BACK + 0.04, scene, 0.015);
 [0.9, 2.05, 3.2].forEach((y) => box(3.8, 0.07, 0.12, beam, 0, y, Z_BACK + 0.04, scene, 0.015));
 box(4.3, 0.1, 0.32, beam, 0, 0.88, Z_BACK + 0.1);
 [[-1, 0.52], [1, -0.52]].forEach(([s, a]) => { const b = box(0.07, 2.2, 0.12, beam, s * 0.95, 4.95, Z_BACK + 0.04, scene, 0.015); b.rotation.z = a; });
-const forest = new THREE.Mesh(new THREE.PlaneGeometry(44, 22), new THREE.MeshBasicMaterial({ fog: false, toneMapped: true, map: canvasTexture(512, 256, (g, w, h) => {
-  const sky = g.createLinearGradient(0, 0, 0, h); sky.addColorStop(0, "#bcd9ea"); sky.addColorStop(0.55, "#e9f1ea"); sky.addColorStop(1, "#fbf3d6");
-  g.fillStyle = sky; g.fillRect(0, 0, w, h);
-  for (let layer = 0; layer < 3; layer++) {                       // far, middle and near trees, each hazier than the next
-    for (let i = 0; i < 46; i++) {
-      const cx = (i * 83 + layer * 41) % w, cy = h * (0.5 + layer * 0.14) + ((i * 37) % (h * 0.35)), r = 14 + (i % 6) * 8 + layer * 5;
-      const gr = g.createRadialGradient(cx, cy, 2, cx, cy, r), k = 0.5 + layer * 0.2;
-      gr.addColorStop(0, `rgba(${Math.round(90 - layer * 25 + (i * 7) % 25)},${Math.round(130 - layer * 20 + (i * 13) % 30)},${Math.round(95 - layer * 20 + (i * 5) % 20)},${k})`);
-      gr.addColorStop(1, "rgba(90,130,95,0)");
-      g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill();
-    }
-    const haze = g.createLinearGradient(0, 0, 0, h); haze.addColorStop(0, "rgba(255,250,235,0)"); haze.addColorStop(1, "rgba(255,250,235,.28)");
-    g.fillStyle = haze; g.fillRect(0, 0, w, h);
-  }
-}) }));
-forest.position.set(0, 6, -13); scene.add(forest);
+// What you see outside, and the light that comes in, is one real photograph of a sunset (an HDR image, so the sun is
+// thousands of times brighter than the sky, exactly as on a camera). It lights the room and is reflected in the wood.
+const SUN_DIR = new THREE.Vector3(0.36, 0.52, -0.78).normalize();   // where the sunlight comes from: outside the big window
+new RGBELoader().load("assets/sky_sunset.hdr", (hdr) => {
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const env = pmrem.fromEquirectangular(hdr).texture;
+  scene.environment = env;
+  const sphere = new THREE.SphereGeometry(48, 64, 40); sphere.scale(-1, 1, 1);
+  const sky = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({ map: hdr, color: new THREE.Color(0.3, 0.3, 0.3), fog: false, depthWrite: false }));   // darker than the real sky, as a camera exposed for the room would see it
+  hdr.mapping = THREE.UVMapping;                                        // the sphere needs plain texture coordinates
+  // turn the photograph so its sun sits just outside the window, in the direction the light comes from
+  const px = 614 / 1024, py = 246 / 512, phi = px * Math.PI * 2, theta = py * Math.PI;
+  const photoSun = new THREE.Vector3(Math.cos(phi) * Math.sin(theta), Math.cos(theta), Math.sin(phi) * Math.sin(theta));
+  sky.rotation.y = Math.atan2(SUN_DIR.x, SUN_DIR.z) - Math.atan2(photoSun.x, photoSun.z);
+  sky.position.set(0, 0, -2); sky.renderOrder = -10; sky.frustumCulled = false; sky.userData.noAO = true;
+  scene.add(sky);
+});
 
 // light: warm sun through the window (soft shadows of the frame on the floor), a little fill, warm lamps
-scene.add(new THREE.HemisphereLight(0xfff0d6, 0x7a5a40, 0.45));
-const sun = new THREE.DirectionalLight(0xffd9a0, 3.4);
-sun.position.set(1.5, 6.5, -11); sun.target.position.set(0, 0, -1);
-sun.castShadow = true; sun.shadow.mapSize.set(mobile ? 1024 : 2048, mobile ? 1024 : 2048); sun.shadow.bias = -0.0004; sun.shadow.radius = 3.5;
-Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 7, bottom: -7, near: 1, far: 30 });
+scene.add(new THREE.HemisphereLight(0xcfd8ee, 0x7a5a40, 0.14));
+const sun = new THREE.DirectionalLight(0xffc27a, 2.9);
+sun.target.position.set(0, 0, -1); sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 24);
+sun.castShadow = true; sun.shadow.mapSize.set(mobile ? 2048 : 4096, mobile ? 2048 : 4096); sun.shadow.bias = -0.0002; sun.shadow.normalBias = 0.03;
+Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 8, bottom: -8, near: 1, far: 45 });
 scene.add(sun, sun.target);
 const lamp = new THREE.PointLight(0xffb468, 14, 9, 2); lamp.position.set(3.1, 2.7, -2.0); scene.add(lamp);
 
@@ -275,141 +278,45 @@ const rayTex = canvasTexture(64, 256, (g, w, h) => {
   const b = g.createLinearGradient(0, 0, w, 0); b.addColorStop(0, "rgba(0,0,0,1)"); b.addColorStop(0.5, "rgba(0,0,0,0)"); b.addColorStop(1, "rgba(0,0,0,1)");
   g.globalCompositeOperation = "destination-out"; g.fillStyle = b; g.fillRect(0, 0, w, h);
 });
-
 [-1.1, 0, 1.1].forEach((dx, i) => {
   const shaft = new THREE.Group();
   [0, Math.PI / 2].forEach((ry) => {
     const p = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 5.2), new THREE.MeshBasicMaterial({ map: rayTex, transparent: true, opacity: 0.16 - i * 0.02, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
-    p.rotation.y = ry; shaft.add(p);
+    p.rotation.y = ry; p.userData.noAO = true; shaft.add(p);
   });
   shaft.rotation.x = -1.0; shaft.position.set(dx * 0.9, 1.5, -3.0); scene.add(shaft);
 });
 
 // ---------- 4. PROPS: the things that make it a workshop ----------
-// leaf texture: the outline comes from the geometry; the texture paints colour, midrib, veins (and the slits of a monstera)
-function leafTexture(kind) {
-  return canvasTexture(128, 256, (g, w, h) => {
-    const P = { ficus: ["#3d6a2c", "#1f4a24"], snake: ["#2c5230", "#16331d"], spider: ["#5d9a3c", "#3b7a2c"], monstera: ["#2b6b34", "#154a27"] }[kind];
-    const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, P[0]); gr.addColorStop(1, P[1]);
-    g.fillStyle = gr; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 900; i++) {                                               // fine mottling
-      g.fillStyle = Math.random() < 0.5 ? "rgba(255,255,200,.05)" : "rgba(0,20,0,.07)";
-      g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 3, 1 + Math.random() * 6);
-    }
-    if (kind === "snake") {                                                       // wavy dark bands + yellow-green margins
-      for (let y = 0; y < h; y += 7) { g.strokeStyle = `rgba(10,35,18,${0.15 + 0.25 * hash(y, 3)})`; g.lineWidth = 2 + 3 * hash(y, 4);
-        g.beginPath(); for (let x = 0; x <= w; x += 8) g.lineTo(x, y + Math.sin(x * 0.15 + y) * 3); g.stroke(); }
-      g.fillStyle = "rgba(200,190,80,.8)"; g.fillRect(0, 0, 7, h); g.fillRect(w - 7, 0, 7, h);
-      return;
-    }
-    if (kind === "spider") {                                                      // cream margins, green centre
-      g.fillStyle = "rgba(235,232,190,.92)"; g.fillRect(0, 0, 30, h); g.fillRect(w - 30, 0, 30, h);
-      g.strokeStyle = "rgba(60,110,40,.6)"; g.lineWidth = 1;
-      for (let x = 34; x < w - 30; x += 8) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
-      return;
-    }
-    g.strokeStyle = "rgba(200,230,150,.75)"; g.lineWidth = 4; g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 0); g.stroke();   // midrib
-    g.lineWidth = 1.4; g.strokeStyle = "rgba(190,225,140,.38)";                  // side veins
-    for (let y = h - 14; y > 14; y -= 15) for (const s of [-1, 1]) {
-      g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w / 2 + s * w * 0.28, y - 8, w / 2 + s * w * 0.5, y - 34); g.stroke();
-    }
-    if (kind === "monstera") {                                                    // the signature slits (see-through)
-      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
-      for (let y = h * 0.2; y < h * 0.9; y += 28) for (const s of [-1, 1]) {
-        const ex = s < 0 ? -2 : w + 2, ix = w / 2 + s * w * 0.14;
-        g.beginPath(); g.moveTo(ex, y - 5); g.lineTo(ix, y + 5); g.lineTo(ex, y + 11); g.closePath(); g.fill();
-      }
-      g.globalCompositeOperation = "source-over";
-    }
-  });
-}
-
-// a leaf surface: length along +z, width along x, normal up. Gently folded along the midrib and drooping toward the tip.
-function leafGeometry({ len, wid, droop = 0.2, fold = 0.25, profile, nu = 6, nv = 14 }) {
-  const geo = new THREE.PlaneGeometry(1, 1, nu, nv), pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const px = pos.getX(i), py = pos.getY(i), t = py + 0.5, x = -px * 2 * (wid / 2) * profile(t);
-    pos.setXYZ(i, x, fold * Math.abs(x) - droop * len * t * t, t * len);
+const leafGeo = (() => {
+  const s = new THREE.Shape(); s.moveTo(0, 0); s.bezierCurveTo(0.11, 0.07, 0.11, 0.22, 0, 0.32); s.bezierCurveTo(-0.11, 0.22, -0.11, 0.07, 0, 0);
+  const g = new THREE.ShapeGeometry(s, 8);
+  const pos = g.attributes.position, uv = g.attributes.uv;                       // texture coordinates that follow the leaf
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) + 0.11) / 0.22, pos.getY(i) / 0.32);
+  g.rotateX(Math.PI / 2); return g;                                              // long axis along +z so lookAt can aim it
+})();
+const leafTex = (() => {                                                         // a midrib, side veins and soft shading
+  const c = document.createElement("canvas"); c.width = 128; c.height = 256; const g = c.getContext("2d");
+  const grad = g.createLinearGradient(0, 0, 128, 0); grad.addColorStop(0, "#b4b4b4"); grad.addColorStop(0.5, "#f2f2f2"); grad.addColorStop(1, "#b4b4b4");
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 256);
+  g.strokeStyle = "rgba(255,255,255,0.9)"; g.lineWidth = 5; g.beginPath(); g.moveTo(64, 256); g.lineTo(64, 0); g.stroke();
+  g.strokeStyle = "rgba(90,90,90,0.55)"; g.lineWidth = 1.6;
+  for (let y = 24; y < 250; y += 15) for (const d of [-1, 1]) { g.beginPath(); g.moveTo(64, 256 - y); g.quadraticCurveTo(64 + d * 30, 256 - y - 14, 64 + d * 58, 256 - y - 40); g.stroke(); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = SRGB; t.anisotropy = 8; return t;
+})();
+function plant(x, z, s = 1, potColor = 0xb5683a) {
+  lathe([[0, 0], [0.11 * s, 0], [0.16 * s, 0.26 * s], [0.175 * s, 0.28 * s], [0.15 * s, 0.28 * s], [0.14 * s, 0.25 * s], [0, 0.25 * s]], std(potColor, { roughness: 0.6 }), x, 0, z);
+  cyl(0.14 * s, 0.14 * s, 0.02, std(0x3a2a1c), x, 0.25 * s, z);                    // soil
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + hash(i, 1), reach = (0.25 + 0.25 * hash(i, 2)) * s, top = (0.5 + 0.35 * hash(i, 3)) * s;
+    const end = new THREE.Vector3(x + Math.cos(a) * reach, top, z + Math.sin(a) * reach);
+    const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(x, 0.26 * s, z), new THREE.Vector3(x + Math.cos(a) * reach * 0.2, top + 0.15 * s, z + Math.sin(a) * reach * 0.2), end);
+    const stem = new THREE.Mesh(new THREE.TubeGeometry(curve, 8, 0.006 * s, 5), std(0x58803c)); stem.castShadow = false; scene.add(stem);
+    const leaf = new THREE.Mesh(leafGeo, std([0x4f7a3a, 0x5d8a43, 0x3f6b36][i % 3], { map: leafTex, roughness: 0.45, side: THREE.DoubleSide }));
+    leaf.scale.setScalar(s * (1.1 + 0.5 * hash(i, 4))); leaf.position.copy(end);
+    leaf.lookAt(end.x + Math.cos(a) * 0.5, end.y - 0.35, end.z + Math.sin(a) * 0.5); leaf.rotateZ(hash(i, 5) - 0.5);
+    leaf.castShadow = false; scene.add(leaf);
   }
-  geo.computeVertexNormals();
-  return geo;
-}
-function leafMaterials(kind, extra = {}) {
-  const tex = leafTexture(kind), tints = [0xffffff, 0xe6f2d6, 0xd2e6c0];
-  return tints.map((c) => new THREE.MeshStandardMaterial({ map: tex, color: c, roughness: kind === "snake" ? 0.4 : 0.5, metalness: 0,
-    side: THREE.DoubleSide, emissive: 0x0b2a0c, emissiveIntensity: 0.35, alphaTest: kind === "monstera" ? 0.5 : 0, ...extra }));
-}
-function addLeaf(parent, geo, mat, pos, az, elev, roll, sc) {
-  const m = new THREE.Mesh(geo, mat);
-  m.position.copy(pos); m.rotation.order = "YXZ"; m.rotation.set(-elev, az, roll); m.scale.setScalar(sc);
-  m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
-}
-function stem(parent, pts, radius, mat) {
-  const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 14, radius, 6), mat);
-  m.castShadow = true; parent.add(m); return m;
-}
-
-const LEAF = {};                                                                  // built once, shared by every plant
-function leafKit() {
-  if (LEAF.ficus) return LEAF;
-  LEAF.ficus = { geo: leafGeometry({ len: 0.30, wid: 0.17, droop: 0.18, fold: 0.3, profile: (t) => Math.pow(Math.sin(Math.PI * Math.pow(t, 0.78)), 0.75) }), mats: leafMaterials("ficus", { roughness: 0.32 }) };
-  LEAF.snake = { geo: leafGeometry({ len: 0.62, wid: 0.085, droop: 0.06, fold: 1.2, profile: (t) => Math.pow(1 - Math.pow(t, 2.4), 0.6) * (0.7 + 0.3 * Math.min(1, t * 8)) }), mats: leafMaterials("snake", { roughness: 0.38 }) };
-  LEAF.spider = { geo: leafGeometry({ len: 0.60, wid: 0.045, droop: 0.55, fold: 0.7, nv: 18, profile: (t) => Math.pow(1 - Math.pow(t, 3), 0.5) * (0.5 + 0.5 * Math.min(1, t * 6)) }), mats: leafMaterials("spider") };
-  LEAF.monstera = { geo: leafGeometry({ len: 0.34, wid: 0.34, droop: 0.12, fold: 0.18, nu: 10, nv: 14, profile: (t) => Math.pow(Math.sin(Math.PI * (t * 0.9 + 0.05)), 0.62) }), mats: leafMaterials("monstera", { roughness: 0.35 }) };
-  return LEAF;
-}
-
-// kind: "ficus" | "snake" | "spider" | "monstera"; s = overall size; glazed = shiny ceramic pot instead of terracotta
-function plant(x, z, s = 1, potColor = 0xb5683a, kind = "ficus") {
-  const K = leafKit(), L = K[kind], g = new THREE.Group(); g.position.set(x, 0, z); g.scale.setScalar(s); scene.add(g);
-  const glazed = potColor !== 0xb5683a, B = 0.03;
-  const pm = pixelMaps(64, 64, (px, py) => {
-    const n = fbm(px * 0.12, py * 0.12), c = new THREE.Color(potColor), k = (glazed ? 0.96 : 0.82) + 0.22 * n;
-    return { c: [c.r * 255 * k, c.g * 255 * k, c.b * 255 * k], h: n };
-  }, [3, 1]);
-  const potMat = std(0xffffff, { map: pm.map, bumpMap: glazed ? null : pm.bump, bumpScale: 1.2, roughness: glazed ? 0.22 : 0.85, side: THREE.DoubleSide });
-  const profile = [[0, 0], [0.09, 0], [0.097, 0.012], [0.145, 0.27], [0.158, 0.285], [0.168, 0.30], [0.168, 0.32], [0.158, 0.322], [0.15, 0.31], [0.14, 0.28], [0, 0.28]];
-  const pot = new THREE.Mesh(new THREE.LatheGeometry(profile.map(([r, h]) => new THREE.Vector2(r, h)), 40), potMat);
-  pot.position.y = B; pot.castShadow = true; pot.receiveShadow = true; g.add(pot);
-  cyl(0.2, 0.15, B, std(glazed ? 0xd8cdb8 : 0xa2552f, { roughness: glazed ? 0.3 : 0.85 }), 0, B / 2, 0, g, 36);       // saucer
-  const SY = B + 0.268;                                                                                           // soil surface
-  const soilTex = canvasTexture(64, 64, (c) => { c.fillStyle = "#33261a"; c.fillRect(0, 0, 64, 64);
-    for (let i = 0; i < 260; i++) { c.fillStyle = `rgba(${Math.random() < 0.5 ? "90,65,40" : "10,6,3"},.5)`; c.fillRect(Math.random() * 64, Math.random() * 64, 1 + Math.random() * 2, 1 + Math.random() * 2); } });
-  const soil = new THREE.Mesh(new THREE.CircleGeometry(0.142, 28), std(0xffffff, { map: soilTex, roughness: 1 }));
-  soil.rotation.x = -Math.PI / 2; soil.position.y = SY; soil.receiveShadow = true; g.add(soil);
-  for (let i = 0; i < 9; i++) { const a = hash(i, 21) * 6.28, r = 0.04 + 0.09 * hash(i, 22);                         // a few pebbles on the soil
-    const p = sph(0.012 + 0.008 * hash(i, 23), std(0x8d8678, { roughness: 0.9 }), Math.cos(a) * r, SY + 0.004, Math.sin(a) * r, g); p.scale.y = 0.6; p.castShadow = false; }
-  contact(x, z, 0.78 * s, 0.78 * s, 0.8);                                                                         // soft shadow on the floor
-
-  const root = new THREE.Vector3(0, SY, 0), mat = (i) => L.mats[i % 3], bark = std(0x6b5a48, { roughness: 0.85 }), green = std(0x587f3a, { roughness: 0.6 });
-  if (kind === "ficus") {                                                         // a tall rubber/fiddle-leaf tree
-    const trunk = new THREE.CatmullRomCurve3([root, new THREE.Vector3(0.02, SY + 0.3, 0.01), new THREE.Vector3(-0.02, SY + 0.62, 0.02), new THREE.Vector3(0.01, SY + 0.92, -0.01)]);
-    stem(g, trunk.getPoints(8), 0.016, bark);
-    for (let i = 0; i < 26; i++) {
-      const t = 0.22 + 0.78 * (i / 25), p = trunk.getPoint(t), az = i * 2.399 + hash(i, 1), up = 0.25 + 0.7 * t;
-      p.x += Math.cos(az) * 0.02; p.z += Math.sin(az) * 0.02;
-      addLeaf(g, L.geo, mat(i), p, Math.PI / 2 - az, up * 0.9, (hash(i, 2) - 0.5) * 0.5, (1.15 - 0.35 * t) * (0.85 + 0.3 * hash(i, 3)));
-    }
-  } else if (kind === "snake") {                                                  // stiff upright sword-shaped leaves
-    for (let i = 0; i < 11; i++) {
-      const az = i * 2.399, r = 0.03 + 0.05 * hash(i, 1), sc = 0.7 + 0.75 * hash(i, 2);
-      addLeaf(g, L.geo, mat(i), new THREE.Vector3(Math.cos(az) * r, SY, Math.sin(az) * r), Math.PI / 2 - az, 1.25 + 0.25 * hash(i, 3), (hash(i, 4) - 0.5) * 1.2, sc);
-    }
-  } else if (kind === "spider") {                                                 // a fountain of arching striped leaves
-    for (let i = 0; i < 24; i++) {
-      const az = i * 2.399 + hash(i, 1), r = 0.015 + 0.03 * hash(i, 2);
-      addLeaf(g, L.geo, mat(i), new THREE.Vector3(Math.cos(az) * r, SY, Math.sin(az) * r), Math.PI / 2 - az, 0.55 + 0.75 * hash(i, 3), (hash(i, 4) - 0.5) * 0.6, 0.8 + 0.5 * hash(i, 5));
-    }
-  } else if (kind === "monstera") {                                               // big split leaves on long arching stalks
-    for (let i = 0; i < 9; i++) {
-      const az = i * 2.399 + 0.4, hgt = 0.28 + 0.55 * hash(i, 1) + 0.06 * i, out = 0.1 + 0.28 * hash(i, 2), sc = 1.0 + 0.5 * hash(i, 3);
-      const end = new THREE.Vector3(Math.cos(az) * out, SY + hgt, Math.sin(az) * out);
-      const mid = new THREE.Vector3(Math.cos(az) * out * 0.25, SY + hgt * 0.75, Math.sin(az) * out * 0.25);
-      stem(g, [root, mid, end], 0.0065, green);
-      addLeaf(g, L.geo, mat(i), end, Math.PI / 2 - az, 0.45 - 0.5 * hash(i, 4), (hash(i, 5) - 0.5) * 0.3, sc);
-    }
-  }
-  return g;
 }
 function ladder(x, z, ry, lean) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry;
@@ -491,7 +398,7 @@ function smallFrame(x, y, z, ry, w, h, seed) {          // painterly studies on 
     c.globalAlpha = 1; c.lineCap = "round";
     for (let i = 0; i < 3; i++) { c.strokeStyle = cols[(seed + i * 3 + 1) % 7]; c.lineWidth = 7 + i * 3; c.beginPath(); c.moveTo(hash(seed, i + 9) * W, hash(i + 4, seed) * H); c.quadraticCurveTo(W / 2, hash(i, 9) * H, hash(seed + 2, i) * W, hash(i + 7, seed) * H); c.stroke(); }
   });
-  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), std(0xffffff, { map: tex, bumpMap: retile(weave, w * 14, h * 14), bumpScale: 1.2, roughness: 0.8 })); p.position.z = 0.025; g.add(p); scene.add(g);
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), std(0xffffff, { map: tex, bumpMap: retile(weave, w * 14, h * 14), bumpScale: 0.25, roughness: 0.8 })); p.position.z = 0.025; g.add(p); scene.add(g);
 }
 function dropCloth(x, z, w, d) {                        // a paint-splattered cloth on the floor
   const tex = canvasTexture(256, 256, (g, W, H) => {
@@ -533,20 +440,12 @@ ladder(-4.6, -4.75, 0.0, 0.17); ladder(5.5, -3.8, -Math.PI / 2, 0.17);
 shelfUnit(5.75, -1.4, -Math.PI / 2); shelfUnit(-5.75, -3.0, Math.PI / 2);
 sofa(4.5, 2.4, -Math.PI / 2); cabinet(-4.9, 1.9, Math.PI / 2); floorLamp(5.2, 0.6); floorLamp(-5.3, -0.6);
 stool(-0.9, -0.2); stool(1.8, -0.9);
-plant(-5.4, 3.4, 1.35, 0xb5683a, "ficus"); plant(5.4, 4.0, 1.2, 0x6b8e8a, "snake"); plant(2.2, -4.6, 1.5, 0xb5683a, "monstera"); plant(-1.6, -4.6, 1.15, 0x436066, "spider");
-books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xea7720); jar(3.75, TOP + 0.03, -2.45, 0x436066);
+plant(-5.4, 3.4, 1.5); plant(5.4, 4.0, 1.3, 0x5474a1); plant(2.2, -4.6, 1.6); plant(-1.6, -4.6, 1.2, 0x5474a1);
+books(3.9, TOP + 0.03, -2.0, 3); brushes(2.2, TOP + 0.03, -2.4); jar(3.6, TOP + 0.03, -2.5, 0xb36633); jar(3.75, TOP + 0.03, -2.45, 0x5474a1);
 for (let i = 0; i < 4; i++) { const c = box(0.8, 1.0, 0.03, std(0xf3ead6, { roughness: 0.9, bumpMap: retile(weave, 10, 12), bumpScale: 1 }), -5.3 + i * 0.07, 0.52, -3.4 - i * 0.04, scene, 0.008); c.rotation.set(-0.1, 0.4 + i * 0.03, 0.02); }
 smallFrame(-5.96, 1.7, -0.2, Math.PI / 2, 0.5, 0.65, 1); smallFrame(-5.96, 2.2, 0.9, Math.PI / 2, 0.45, 0.45, 2);
 smallFrame(-5.96, 1.6, 1.6, Math.PI / 2, 0.6, 0.45, 3); smallFrame(5.96, 2.3, 1.2, -Math.PI / 2, 0.5, 0.6, 4);
 smallFrame(5.96, 1.8, 2.4, -Math.PI / 2, 0.55, 0.4, 5); smallFrame(5.96, 2.5, -0.4, -Math.PI / 2, 0.45, 0.45, 6);
-// soft contact shadows under the big pieces
-contact(-2.4, -1.1, 3.0, 1.5);            // big work table
-contact(3.1, -2.2, 2.4, 1.4);             // tool table
-contact(0.5, -2.3, 1.3, 1.0);             // easel
-contact(4.5, 2.4, 1.3, 2.4);              // sofa
-contact(-4.9, 1.9, 1.4, 1.9);             // cabinet
-contact(5.75, -1.4, 0.8, 1.9); contact(-5.75, -3.0, 0.8, 1.9);   // shelves
-contact(-0.9, -0.2, 0.6, 0.6); contact(1.8, -0.9, 0.6, 0.6);     // stools
 
 const interactive = [];       // everything the learner can click: paintings and tools
 
@@ -583,6 +482,7 @@ const chalk = makeTool("chalk", "Edge Chalk", TABLE_X + 0.6, (g) => {
   const band = cyl(0.0235, 0.0235, 0.05, std(ORG, { roughness: 0.8 }), -0.025, 0.024, 0, g, 24); band.rotation.z = Math.PI / 2;
   g.rotation.y = -0.4; g.userData.homeQuat = g.quaternion.clone();
 });
+
 const tools = [sponge, knife, chalk];
 
 // name tags above the tools (drawn once the fonts are ready)
@@ -595,7 +495,7 @@ document.fonts.ready.then(() => {
       g.fillText(t.userData.name, w / 2, h / 2 + 1);
     });
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
-    label.scale.set(0.46, 0.115, 1); label.position.set(0, 0.24, 0); label.renderOrder = 5;
+    label.scale.set(0.46, 0.115, 1); label.position.set(0, 0.24, 0); label.renderOrder = 5; label.userData.noAO = true;
     t.add(label); t.userData.label = label;
   });
 });
@@ -624,14 +524,14 @@ function smoothTexture(key) {
 
 function makePainting(key, w, h, x, y, z = -4.93, tilt = 0, photo = null) {
   const g = new THREE.Group();
-  box(w + 0.16, h + 0.16, 0.06, std(0x3a2013, { roughness: 0.45, bumpMap: furnMaps.bump, bumpScale: 1 }), 0, 0, 0, g, 0.02);     // frame moulding
+  box(w + 0.16, h + 0.16, 0.06, surfMat(woodSet, 0x4a2a18, { roughness: 0.9 }), 0, 0, 0, g, 0.02);     // frame moulding
   box(w + 0.05, h + 0.05, 0.07, std(0xb8925c, { roughness: 0.4 }), 0, 0, 0.005, g, 0.01);                                            // inner gilt liner
   const canvasMat = new THREE.MeshPhysicalMaterial({ map: smoothTexture(key), roughness: 0.75, clearcoat: 0.35, clearcoatRoughness: 0.4, envMapIntensity: 0.6,
-    bumpMap: retile(weave, w * 16, h * 16), bumpScale: 1.1 });
+    bumpMap: retile(weave, w * 16, h * 16), bumpScale: 0.25 });
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), canvasMat);
   plane.position.z = 0.045; plane.receiveShadow = true; g.add(plane);
   g.position.set(x, y, z); g.rotation.x = tilt;
-  g.userData = { type: "painting", key, name: Patterns[key].name, w, h, plane, staticMap: canvasMat.map, home: g.position.clone(), homeQuat: g.quaternion.clone() };
+  g.userData = { type: "painting", key, name: Patterns[key].name, photo, w, h, plane, staticMap: canvasMat.map, home: g.position.clone(), homeQuat: g.quaternion.clone() };
   if (photo) new THREE.TextureLoader().load(photo, (t) => { t.colorSpace = SRGB; t.anisotropy = 8; canvasMat.map = t; canvasMat.needsUpdate = true; g.userData.staticMap = t; });
   scene.add(g); interactive.push(g);
   return g;
@@ -649,50 +549,43 @@ const paintings = [
   makePainting("medallion",1.06, 1.35,  5.29,  2.38, -4.93, 0, A + "medallion.jpg"),
   // leaning on the floor
   makePainting("sunflower",   0.65, 1.15, -4.0, 0.62, -4.84, -0.1, A + "sunflower.jpg"),
-  makePainting("pomegranate", 0.65, 1.15, -0.9, 0.62, -4.84, -0.1, A + "pomegranate.jpg"),
+  makePainting("pomegranate", 0.42, 0.75, -0.3, 0.41, -4.84, -0.1, A + "pomegranate.jpg"),   // small enough to stand under the window sill, clear of the plants
 ];
-contact(-4.0, -4.6, 1.3, 0.6, 0.6); contact(-0.9, -4.6, 1.2, 0.6, 0.6);
-
-// the glowing 3x3 frame, mirrored on the painting in 3D
-const kernelFrame = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
-  map: canvasTexture(128, 128, (g, w, h) => {
-    g.shadowColor = "#b36633"; g.shadowBlur = 14;
-    g.strokeStyle = "#1f2240"; g.lineWidth = 14; g.strokeRect(10, 10, w - 20, h - 20);
-    g.strokeStyle = "#f4e4c8"; g.lineWidth = 7; g.strokeRect(10, 10, w - 20, h - 20);
-  }), transparent: true, depthWrite: false, toneMapped: false }));
-kernelFrame.visible = false; kernelFrame.renderOrder = 4;
+contact(-4.0, -4.6, 1.3, 0.6, 0.6); contact(-0.3, -4.6, 0.8, 0.5, 0.6);
 
 // ---------- 6. TWEENS AND THE CAMERA ----------
 const tweens = [];
 const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 function tween(duration, update, done) { tweens.push({ t: 0, duration, update, done }); }
 
-const view = { pos: new THREE.Vector3(0, 1.65, 6.4), tgt: new THREE.Vector3(0, 1.55, -3) };
-function goView(pos, tgt, duration, done) {
-  const p0 = view.pos.clone(), t0 = view.tgt.clone();
-  tween(duration, (k) => { view.pos.lerpVectors(p0, pos, k); view.tgt.lerpVectors(t0, tgt, k); }, done);
+const view = { pos: new THREE.Vector3(0, 1.65, 6.4), tgt: new THREE.Vector3(0, 1.55, -3), fov: 60 };
+function goView(pos, tgt, duration, done, fov = 60) {
+  const p0 = view.pos.clone(), t0 = view.tgt.clone(), f0 = view.fov;
+  tween(duration, (k) => { view.pos.lerpVectors(p0, pos, k); view.tgt.lerpVectors(t0, tgt, k); view.fov = f0 + (fov - f0) * k; }, done);
 }
 const V = {
   room: [new THREE.Vector3(0, 1.65, 1.6), new THREE.Vector3(0, 2.1, -4)],
   pick: [new THREE.Vector3(1.7, 1.6, 0.9), new THREE.Vector3(1.8, 1.2, -2.4)],
 };
-function labView() {                                  // painting on the left on wide screens, on top on phones
+// In the lab the camera is the painter's eyes, only 1.2 m from the painting with a wide lens, so her arm comes in from the
+// bottom of the screen like a real arm. The painting sits in the left of the screen on wide screens, on top on phones.
+const LAB_FOV = 68;
+function labView() {
   const wide = window.innerWidth > 760;
-  return [new THREE.Vector3(EASEL_X, 1.4, -0.3), new THREE.Vector3(EASEL_X + (wide ? 0.62 : 0), wide ? 1.3 : 0.95, -2.3)];
+  return [new THREE.Vector3(EASEL_X, 1.5, -0.85), new THREE.Vector3(EASEL_X + (wide ? 0.6 : 0), wide ? 1.5 : 1.15, -2.1)];
 }
 
 const look = { yaw: 0, pitch: 0, ty: 0, tp: 0 };      // drag to look around, always easing back to a limit
 
 // ---------- 7. THE GAME FLOW ----------
 let stage = "title";                                  // title, pickPainting, pickTool, moving, lab
-let easelPainting = null, heldTool = null, liveTexture = null;
+let easelPainting = null, heldTool = null, liveTexture = null, showingLive = false, lastVersion = -1;
 const hud = $("hud");
 let hudDefault = "";
 function setStage(s, text) { stage = s; hudDefault = text || ""; hud.hidden = !text; $("hudText").textContent = hudDefault; }
 
 const EASEL_POSE = { pos: (h) => new THREE.Vector3(EASEL_X, 0.8 + h / 2, -2.1), quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.1, 0, 0)) };
 const holdPos = () => new THREE.Vector3(window.innerWidth > 760 ? -0.22 : 0.26, -0.27, -0.62);  // visible beside the lab panel
-const HOLD_QUAT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, -0.6, 0.1));
 
 function flyTo(obj, pos, quat, duration, done) {      // fly an object (with a little arc) to a pose
   const p0 = obj.position.clone(), q0 = obj.quaternion.clone();
@@ -716,40 +609,43 @@ function choosePainting(p) {
   goView(...V.pick, 1.4, () => setStage("pickTool", "Now grab a tool from the table."));
 }
 
+const HOLD_QUAT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, -0.6, 0.1));   // how the tool is held when it is picked up
 function chooseTool(t) {
   setStage("moving");
   hover(null);
   heldTool = t;
-  camera.attach(t);                                    // the tool now follows the camera: it is in the painter's hand
-  const p0 = t.position.clone(), q0 = t.quaternion.clone(), hp = holdPos();
+  camera.attach(t);                                    // the picked tool flies up to the camera
+  const p0 = t.position.clone(), q0 = t.quaternion.clone(), hp = holdPos(), holdQ = HOLD_QUAT;
   if (t.userData.label) t.userData.label.visible = false;      // the name tag stays on the table
-  tween(1.0, (k) => { t.position.lerpVectors(p0, hp, k); t.quaternion.slerpQuaternions(q0, HOLD_QUAT, k); });
-  goView(...labView(), 1.5, openLab);
+  tween(1.0, (k) => { t.position.lerpVectors(p0, hp, k); t.quaternion.slerpQuaternions(q0, holdQ, k); });
+  goView(...labView(), 1.5, openLab, LAB_FOV);
 }
 
 function openLab() {
   $("lab").hidden = false;
-  Lab.open(heldTool.userData.key, easelPainting.userData.key);   // lab.js: explanation, modes, detail card
-  // the painting on the easel now shows the live canvas, so the convolution plays on it in 3D
+  Lab.open(heldTool.userData.key, easelPainting.userData.key, easelPainting.userData.photo);   // lab.js: explanation, modes, detail card
+  // the painting keeps showing the real, smooth picture; it only switches to the live canvas once the tool changes a tile
   liveTexture = new THREE.CanvasTexture(Lab.canvas);
-  liveTexture.colorSpace = THREE.SRGBColorSpace; liveTexture.magFilter = THREE.NearestFilter;
-  easelPainting.userData.plane.material.map = liveTexture;
-  easelPainting.userData.plane.material.needsUpdate = true;
-  easelPainting.add(kernelFrame);
+  liveTexture.colorSpace = THREE.SRGBColorSpace; liveTexture.anisotropy = 8;
+  showingLive = false; lastVersion = -1;
+  heldTool.visible = false;                            // in the lab the cursor is the tool: nothing blocks the painting
+  canvasEl.style.cursor = "default";
   setStage("lab");
 }
 
 function closeLab(paintingToo) {
   setStage("moving");
+  labPtr.down = false; labPtr.over = false;
   Lab.close();
   $("lab").hidden = true;
-  kernelFrame.visible = false;
   const pl = easelPainting.userData.plane;
   pl.material.map = easelPainting.userData.staticMap; pl.material.needsUpdate = true;
   if (liveTexture) { liveTexture.dispose(); liveTexture = null; }
+  showingLive = false;
 
   const tool = heldTool; heldTool = null;
   if (tool.userData.label) tool.userData.label.visible = true;
+  tool.visible = true;
   scene.attach(tool);                                  // let go of the tool: it goes back to the table
   flyTo(tool, tool.userData.home, tool.userData.homeQuat, 1.0);
   if (paintingToo) {
@@ -791,8 +687,31 @@ function hover(obj) {                                 // a warm glow on whatever
   canvasEl.style.cursor = obj ? "pointer" : "grab";
 }
 
-canvasEl.addEventListener("pointerdown", (e) => { dragging = true; moved = 0; last = [e.clientX, e.clientY]; canvasEl.setPointerCapture(e.pointerId); });
+// In the lab the cursor is the tool: pressing and dragging over the painting works it
+const labPtr = { over: false, down: false, point: new THREE.Vector3(), tile: null };
+function paintingHit(e) {
+  const r = canvasEl.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  return raycaster.intersectObject(easelPainting.userData.plane)[0] || null;
+}
+function labPointer(e, type) {
+  const hit = paintingHit(e);
+  labPtr.over = !!hit;
+  if (type === "up") { labPtr.down = false; labPtr.tile = null; return; }
+  if (!hit) return;
+  labPtr.point.copy(hit.point);
+  const g = Lab.grid, tx = Math.min(g.cols - 1, Math.floor(hit.uv.x * g.cols)), ty = Math.min(g.rows - 1, Math.floor((1 - hit.uv.y) * g.rows));
+  if (type === "down") { labPtr.down = true; labPtr.tile = null; }
+  if (labPtr.down && Lab.mode === "free") {
+    const from = labPtr.tile || [tx, ty], n = Math.max(Math.abs(tx - from[0]), Math.abs(ty - from[1]), 1);
+    for (let k = 1; k <= n; k++) Lab.touch(Math.round(from[0] + ((tx - from[0]) * k) / n), Math.round(from[1] + ((ty - from[1]) * k) / n));   // no gaps when the cursor moves fast
+    labPtr.tile = [tx, ty];
+  }
+}
+
+canvasEl.addEventListener("pointerdown", (e) => { if (stage === "lab") { canvasEl.setPointerCapture(e.pointerId); labPointer(e, "down"); return; } dragging = true; moved = 0; last = [e.clientX, e.clientY]; canvasEl.setPointerCapture(e.pointerId); });
 canvasEl.addEventListener("pointermove", (e) => {
+  if (stage === "lab") { labPointer(e, "move"); return; }
   if (dragging) {
     const dx = e.clientX - last[0], dy = e.clientY - last[1];
     moved += Math.abs(dx) + Math.abs(dy); last = [e.clientX, e.clientY];
@@ -802,6 +721,7 @@ canvasEl.addEventListener("pointermove", (e) => {
   } else hover(pick(e));
 });
 canvasEl.addEventListener("pointerup", (e) => {
+  if (stage === "lab") { labPointer(e, "up"); return; }
   dragging = false;
   if (moved > 6) return;                              // it was a drag, not a click
   const o = pick(e);
@@ -813,18 +733,60 @@ canvasEl.addEventListener("pointerup", (e) => {
 // ---------- 9. THE LOOP ----------
 const clock = new THREE.Clock();
 
-// Keeps the game smooth on weaker devices: if frames take too long, draw at a slightly lower resolution
+// ---------- 7. THE LOOK: ambient occlusion, bloom, film grading ----------
+// Ambient occlusion darkens the corners and contact points where light can't reach, which is what makes a room feel solid.
+// Bloom lets the very bright sun glow into the room. The grade adds a warm/cool tone split, a vignette and a little film grain.
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAspect: { value: 1 } },
+  vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime, uAspect; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.35);                                           // a gentle S-curve for richer contrast
+      float l = dot(c, vec3(0.299, 0.587, 0.114));
+      c += vec3(0.022, 0.010, -0.014) * smoothstep(0.45, 1.0, l) + vec3(-0.006, 0.0, 0.014) * (1.0 - smoothstep(0.0, 0.4, l));   // warm lights, cool shadows
+      vec2 d = vUv - 0.5; d.x *= uAspect;
+      c *= mix(0.70, 1.0, smoothstep(0.95, 0.15, length(d)));                               // vignette
+      float g = fract(sin(dot(vUv * vec2(1923.1, 1371.7) + uTime, vec2(12.9898, 78.233))) * 43758.5453);
+      c += (g - 0.5) * 0.02;                                                                // film grain (also hides colour banding)
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+};
+let quality = 2, gtao = null, bloom = null, grade = null;       // 2 = everything, 1 = no ambient occlusion, 0 = plain rendering
+function buildComposer() {
+  const w = window.innerWidth, h = window.innerHeight;
+  composer = new EffectComposer(renderer);
+  composer.setPixelRatio(pixelRatio);
+  const samples = Math.min(4, renderer.capabilities.maxSamples || 0);
+  composer.renderTarget1.samples = samples; composer.renderTarget2.samples = samples;   // smooth, un-jagged edges
+  composer.addPass(new RenderPass(scene, camera));
+  gtao = new GTAOPass(scene, camera, w, h);
+  gtao.blendIntensity = 1.0;
+  gtao.updateGtaoMaterial({ radius: 0.4, distanceExponent: 1.5, thickness: 1.5, scale: 1.2, samples: 12, distanceFallOff: 1, screenSpaceRadius: false });
+  gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, radiusExponent: 1, rings: 2, samples: 12 });
+  const hide = gtao.overrideVisibility.bind(gtao);                  // light shafts, the sky and soft shadows are not solid things
+  gtao.overrideVisibility = function () { hide(); scene.traverse((o) => { if (o.userData.noAO) o.visible = false; }); };
+  composer.addPass(gtao);
+  bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.22, 0.7, 1.5);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  grade = new ShaderPass(GradeShader); composer.addPass(grade);
+  composer.setSize(w, h);
+}
+try { buildComposer(); } catch (error) { console.warn("Post-processing is not available, using plain rendering.", error); composer = null; quality = 0; }
+
+// Keeps the game smooth on weaker devices. If frames take too long it switches effects off first (ambient occlusion, then
+// bloom) and only as a last resort draws at a slightly lower resolution, never below 0.85 so the picture stays sharp.
 let frameCount = 0, frameTime = 0;
 function adaptQuality(seconds) {
   frameCount++; frameTime += seconds;
-  if (frameCount < 45) return;
+  if (frameCount < 60) return;
   const average = frameTime / frameCount;
   frameCount = 0; frameTime = 0;
-  if (average > 0.035 && pixelRatio > 0.55) pixelRatio = Math.max(0.55, pixelRatio - 0.2);
-  else if (average < 0.018 && pixelRatio < maxPixelRatio) pixelRatio = Math.min(maxPixelRatio, pixelRatio + 0.1);
-  else return;
-  renderer.setPixelRatio(pixelRatio);
-  resize();
+  if (average < 0.036) return;
+  if (quality === 2 && composer) { quality = 1; gtao.enabled = false; }
+  else if (quality === 1) { quality = 0; }
+  else if (pixelRatio > 0.85) { pixelRatio = Math.max(0.85, pixelRatio - 0.15); renderer.setPixelRatio(pixelRatio); if (composer) composer.setPixelRatio(pixelRatio); resize(); }
 }
 function frame() {
   const raw = clock.getDelta(), dt = Math.min(raw, 0.05);
@@ -838,23 +800,24 @@ function frame() {
   }
   if (stage === "lab" || stage === "moving") { look.ty = 0; look.tp = 0; }
   look.yaw += (look.ty - look.yaw) * 0.12; look.pitch += (look.tp - look.pitch) * 0.12;
+  if (camera.fov !== view.fov) { camera.fov = view.fov; camera.updateProjectionMatrix(); }
   camera.position.copy(view.pos);
   camera.lookAt(view.tgt);
   camera.rotateY(look.yaw); camera.rotateX(look.pitch);
 
-  if (stage === "lab" && liveTexture) {               // mirror the lab on the painting: pixels and the glowing frame
-    liveTexture.needsUpdate = true;
-    const f = Lab.frame, d = easelPainting.userData;
-    kernelFrame.visible = !f.hidden;
-    if (!f.hidden) {
-      const L = parseFloat(f.style.left), T = parseFloat(f.style.top), W = parseFloat(f.style.width), H = parseFloat(f.style.height);
-      kernelFrame.position.set(((L + W / 2) / 100 - 0.5) * d.w, (0.5 - (T + H / 2) / 100) * d.h, 0.05);
-      kernelFrame.scale.set((W / 100) * d.w, (H / 100) * d.h, 1);
+  if (stage === "lab" && liveTexture) {
+    // the painting shows the real picture until the tool has changed something, then the live canvas
+    const plane = easelPainting.userData.plane;
+    if (Lab.info.dirty !== showingLive) {
+      showingLive = Lab.info.dirty;
+      plane.material.map = showingLive ? liveTexture : easelPainting.userData.staticMap; plane.material.needsUpdate = true; lastVersion = -1;
     }
+    if (showingLive && Lab.info.version !== lastVersion) { lastVersion = Lab.info.version; liveTexture.needsUpdate = true; }
   }
-  renderer.render(scene, camera);
+  if (quality > 0 && composer) { grade.uniforms.uTime.value = (performance.now() % 100000) / 1000; grade.uniforms.uAspect.value = camera.aspect; composer.render(dt); }
+  else renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 frame();
 
-window.__game = { renderer, view, scene, camera, paintings, tools, choosePainting, chooseTool, get stage() { return stage; } };  // handy for testing
+window.__game = { renderer, view, scene, camera, paintings, tools, choosePainting, chooseTool, Lab, get stage() { return stage; } };  // handy for testing

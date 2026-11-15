@@ -7,7 +7,7 @@
 
 (() => {
   // ---------- 1. SETTINGS AND TEXTS ----------
-  const TILE = 20;          // size of one tile on the canvas, in pixels (CSS scales the canvas)
+  const TILE = 40;          // size of one tile on the canvas, in pixels (CSS scales the canvas). Big enough to keep the real picture sharp
   const RUN_TIME = 7500;    // total duration of one autoplay run, in milliseconds
 
   const TEXT = {
@@ -27,7 +27,8 @@
       why: "Why only borders show: the middle tile counts strongly and its neighbours count against it by exactly the same amount. On flat colour they cancel out and the tile stays dark. Where colours change, they no longer cancel and the tile lights up. This is an edge-detection kernel."
     }
   };
-  const STEP_HINT = "Each press moves the frame to the next tile and adds one new tile on the right.";
+  const STEP_HINT = "Each press moves the tool to the next tile and adds one new tile on the right.";
+  const FREE_HINT = "Press and drag over the painting with your cursor to use the tool yourself, or press Autoplay to watch it work.";
 
   // ---------- 2. SHORTCUTS AND STATE ----------
   const $ = (id) => document.getElementById(id);
@@ -40,16 +41,23 @@
   const state = {
     tool: null,          // "sponge", "knife" or "chalk"
     pattern: "garden",   // a key of Patterns (see data.js)
-    mode: "idle",        // "idle" (waiting), "auto" (plays by itself) or "step" (one tile per press)
+    mode: "free",        // "free" (the learner moves the tool), "auto" (plays by itself) or "step" (one tile per press)
     image: null,         // the current pattern: { cols, rows, pixels }
     result: [],          // autoplay: new colour of every tile, computed by the engine
     revealed: 0,         // autoplay: how many tiles have already been changed on screen
     stepIndex: 0,        // step mode: how many tiles have been done
     inspect: null,       // the tile shown in the detail card: { x, y }
+    photo: null,         // the real picture (loaded image), shown until the tool changes a tile
+    painted: [],         // by hand: new colour of every tile the tool has touched
+    paintedCount: 0,
     showOriginal: false, // true while "Hold to see the original" is pressed
     runTimer: null,
     startTimer: null
   };
+
+  // What the 3D game reads: where the tool should be, and whether the picture has been changed yet
+  const cursor = { x: 0, y: 0, active: false };   // active: the lab (autoplay or step) is moving the tool
+  const info = { dirty: false, version: 0 };      // dirty: some tiles are changed, so the painting must show the live canvas
 
   // ---------- 3. DRAWING ----------
   // [r, g, b] with values from 0 to 1  ->  "rgb(255, 0, 0)"
@@ -57,16 +65,38 @@
     return "rgb(" + color.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(",") + ")";
   }
 
-  // Original canvas. In autoplay the tiles change in place; in step mode it always stays original.
+  function updateDirty() {
+    info.dirty = (state.mode === "auto" && state.revealed > 0) || (state.mode === "free" && state.paintedCount > 0);
+    info.version++;
+  }
+
+  // The new colour of tile i, or null when the tile is still the untouched picture
+  function changedColor(i) {
+    if (state.showOriginal) return null;
+    if (state.mode === "auto" && i < state.revealed) return state.result[i];
+    if (state.mode === "free" && state.painted[i]) return state.painted[i];
+    return null;                         // step mode: the left canvas always stays original
+  }
+
+  // Original canvas. Untouched tiles show the real picture; touched tiles show the tool's result.
   function drawTile(i) {
     const { cols, pixels } = state.image;
-    const useResult = state.mode === "auto" && i < state.revealed && !state.showOriginal;
-    ctx.fillStyle = css(useResult ? state.result[i] : pixels[i]);
-    ctx.fillRect((i % cols) * TILE, Math.floor(i / cols) * TILE, TILE, TILE);
+    const x = (i % cols) * TILE, y = Math.floor(i / cols) * TILE, col = changedColor(i);
+    if (col) { ctx.fillStyle = css(col); ctx.fillRect(x, y, TILE, TILE); }
+    else if (state.photo) {
+      const sw = state.photo.naturalWidth / cols, sh = state.photo.naturalHeight / state.image.rows;
+      ctx.drawImage(state.photo, (i % cols) * sw, Math.floor(i / cols) * sh, sw, sh, x, y, TILE, TILE);
+    } else { ctx.fillStyle = css(pixels[i]); ctx.fillRect(x, y, TILE, TILE); }
+    info.version++;
   }
 
   function drawAll() {
-    for (let i = 0; i < state.image.pixels.length; i++) drawTile(i);
+    if (state.photo) ctx.drawImage(state.photo, 0, 0, canvas.width, canvas.height);   // the whole picture, smooth
+    for (let i = 0; i < state.image.pixels.length; i++) {
+      if (state.photo && !changedColor(i)) continue;
+      drawTile(i);
+    }
+    updateDirty();
   }
 
   // Scale the canvas (or the two canvases) to fit the lab panel, keeping the pattern's proportions
@@ -93,7 +123,7 @@
     el.style.width = (w / cols) * 100 + "%";
     el.style.height = (h / rows) * 100 + "%";
   }
-  const moveFrame = (x, y) => placeBox(frame, x - 1, y - 1, 3, 3); // the glowing 3x3 frame
+  const moveFrame = (x, y) => { cursor.x = x; cursor.y = y; cursor.active = true; placeBox(frame, x - 1, y - 1, 3, 3); }; // step mode: outline of the 9 tiles
   const moveMark = (x, y) => placeBox(mark, x, y, 1, 1);           // the newest tile on the result
 
   // ---------- 4. SHARED HELPERS ----------
@@ -112,19 +142,8 @@
   }
 
   function setMoreLabel(open) {
-    const b = $("more"), tip = open ? "Hide details" : "More details";
-    b.setAttribute("aria-expanded", String(open));
-    b.setAttribute("aria-label", tip);
-    b.dataset.tip = tip;                    // the CSS shows this text in the hover bubble
-  }
-
-  // Show the "?" icon, with one pulse the first time it appears
-  function showMore() {
-    const b = $("more");
-    if (!b.hidden) return;
-    setMoreLabel(false);
-    b.hidden = false;
-    if (!reduceMotion) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
+    $("more").setAttribute("aria-expanded", String(open));
+    $("more").textContent = open ? "Hide detail ▴" : "Want more detail? ▾";
   }
 
   // Prepare a pattern on the canvas (without starting anything)
@@ -134,6 +153,8 @@
     state.revealed = 0;
     state.stepIndex = 0;
     state.showOriginal = false;
+    state.painted = []; state.paintedCount = 0;
+    cursor.active = false;
     [canvas, canvasOut].forEach((c) => {
       c.width = state.image.cols * TILE;
       c.height = state.image.rows * TILE;
@@ -184,17 +205,21 @@
   function finishRun() {
     stopAnimation();
     frame.hidden = true;
+    cursor.active = false;                // the tool lifts off the painting
     $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
     state.inspect = null; // the card will explain the middle tile
-    showMore();
+    setMoreLabel(false);
+    $("more").hidden = false;
   }
 
-  // Slide the frame over every tile, row by row, changing each tile in place
+  // Slide the tool over every tile, row by row, changing each tile in place
   function play() {
     stopAnimation();
     resetMessages();
     state.showOriginal = false;
     state.revealed = 0;
+    state.painted = []; state.paintedCount = 0;
+    frame.hidden = true;                  // no glowing frame: the tool itself slides over the painting
     state.result = Convolution.applyAll(state.image, state.tool); // all results computed first
     drawAll();
 
@@ -202,10 +227,11 @@
     const cols = state.image.cols;
     let i = 0;
     state.runTimer = setInterval(() => {
-      moveFrame(i % cols, Math.floor(i / cols));
+      cursor.x = i % cols; cursor.y = Math.floor(i / cols); cursor.active = true;
       i++;
       state.revealed = i;
       drawTile(i - 1);
+      info.dirty = true;
       if (i >= total) finishRun();
     }, Math.max(8, RUN_TIME / total));
   }
@@ -217,6 +243,7 @@
     state.stepIndex = 0;
     frame.hidden = true;
     mark.hidden = true;
+    cursor.active = false;
     ctxOut.clearRect(0, 0, canvasOut.width, canvasOut.height);
     drawAll();
     $("next").disabled = false;
@@ -238,33 +265,54 @@
     state.stepIndex = i + 1;
     state.inspect = { x, y };
     $("fin").textContent = STEP_HINT;
-    showMore();
+    if ($("more").hidden) { setMoreLabel(false); $("more").hidden = false; }
     if (!$("real").hidden) fillDetail(); // keep the open card in sync with the frame
 
     if (state.stepIndex >= total) {
       frame.hidden = true;
+      cursor.active = false;
       $("next").disabled = true;
       $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
     }
   }
 
   // ---------- 8. MODES, SCROLLING AND TOOL CHOICE ----------
-  // Waiting state: the original canvas, nothing playing, no mode chosen yet
-  function showIdle() {
+  // By hand: the picture is untouched; the learner moves the tool over it
+  function resetFree() {
     stopAnimation();
     resetMessages();
-    state.mode = "idle";
-    document.querySelectorAll("[data-m]").forEach((b) => b.setAttribute("aria-pressed", "false"));
-    $("outBoard").hidden = true;
-    $("stepControls").hidden = true;
-    $("lblIn").hidden = true;
-    $("orig").hidden = true;
+    state.painted = []; state.paintedCount = 0;
+    state.showOriginal = false;
+    state.revealed = 0;
+    cursor.active = false;
     frame.hidden = true;
     mark.hidden = true;
-    state.revealed = 0;
-    fitCanvas();
     drawAll();
-    $("fin").textContent = "Press Autoplay to watch it by itself, or Step by step to go one tile at a time.";
+    $("fin").textContent = FREE_HINT;
+  }
+
+  // Called by the game each time the tool touches the painting at tile (x, y): the 9 tiles under it change
+  function touch(x, y) {
+    if (state.mode !== "free" || !state.image || state.showOriginal) return;
+    const { cols, rows } = state.image;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = x + dx, ty = y + dy;
+        if (tx < 0 || ty < 0 || tx >= cols || ty >= rows) continue;
+        const i = ty * cols + tx;
+        if (state.painted[i]) continue;
+        state.painted[i] = Convolution.applyAt(state.image, state.tool, tx, ty);   // always computed from the original tiles
+        state.paintedCount++;
+        drawTile(i);
+      }
+    }
+    state.inspect = { x: Math.max(0, Math.min(cols - 1, x)), y: Math.max(0, Math.min(rows - 1, y)) };
+    if ($("more").hidden) { setMoreLabel(false); $("more").hidden = false; }
+    if (!$("real").hidden) fillDetail();
+    $("fin").textContent = state.paintedCount >= cols * rows
+      ? TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time."
+      : "Every tile you touch is mixed from the 9 tiles under the tool.";
+    updateDirty();
   }
 
   function setMode(mode) {
@@ -281,9 +329,11 @@
     resetMessages();
     frame.hidden = true;
     mark.hidden = true;
+    cursor.active = false;
     fitCanvas();
     if (step) resetStep();
-    else { state.revealed = 0; drawAll(); play(); }
+    else if (mode === "free") resetFree();
+    else { state.revealed = 0; state.painted = []; state.paintedCount = 0; drawAll(); play(); }
   }
 
   // ---------- 9. BUTTONS ----------
@@ -292,7 +342,7 @@
   });
 
   $("next").addEventListener("click", stepNext);
-  $("replay").addEventListener("click", () => (state.mode === "step" ? resetStep() : setMode("auto")));
+  $("replay").addEventListener("click", () => (state.mode === "step" ? resetStep() : state.mode === "free" ? resetFree() : setMode("auto")));
 
   // Hold to see the original (autoplay only): show the untouched pattern while pressed
   const original = $("orig");
@@ -319,17 +369,26 @@
 
   // ---------- 10. WHAT THE GAME USES ----------
   // Open the lab with a tool on a pattern. Nothing plays until the learner presses a mode button.
-  function open(tool, pattern) {
+  function open(tool, pattern, photoUrl) {
     state.tool = tool;
+    state.photo = null;
+    if (photoUrl) {                       // the real picture replaces the flat tiles as soon as it is loaded
+      const img = new Image();
+      img.onload = () => { if (state.pattern === pattern) { state.photo = img; drawAll(); } };
+      img.src = photoUrl;
+    }
     $("tName").textContent = Convolution.KERNELS[tool].name;
     $("tWhat").textContent = TEXT[tool].what;
     stopAnimation();
     resetMessages();
     loadPattern(pattern);
-    showIdle();
+    setMode("free");
   }
   function close() { stopAnimation(); resetMessages(); }
 
-  // canvas = the live picture, frame = the glowing 3x3 frame (the game mirrors both in 3D)
-  window.Lab = { open, close, canvas, frame };
+  // canvas = the live picture; cursor = where the tool should be; info = has the picture changed;
+  // touch = the tool touched the painting (by hand). The game mirrors all of this in 3D.
+  window.Lab = { open, close, canvas, frame, cursor, info, touch,
+    get mode() { return state.mode; },
+    get grid() { return { cols: state.image.cols, rows: state.image.rows }; } };
 })();
