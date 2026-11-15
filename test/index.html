@@ -12,13 +12,14 @@
 <body class="game">
 
   <!-- the 3D workshop is drawn here by js/game.js -->
-  <canvas id="scene" aria-label="The crafter’s workshop"></canvas>
+  <canvas id="scene" aria-label="The painter’s workshop"></canvas>
 
   <!-- title screen -->
   <div class="intro" id="intro">
-    <h1>The Crafter’s <em>Workshop</em></h1>
-    <p class="lead">You are a crafter. Step into your workshop, pick one of your mosaic arts and a tool, and see what it does!!</p>
+    <h1>The Crafter’s <em>Workbench</em></h1>
+    <p class="lead">You are a painter. Step into your workshop, pick a painting and a tool, and see how a tool mixes what is under it.</p>
     <button class="btn go" id="start">Enter the workshop ▸</button>
+    <p class="lbl">Drag to look around</p>
   </div>
 
   <!-- instruction shown while the learner explores the workshop -->
@@ -33,7 +34,6 @@
       <div class="row" role="group" aria-label="Mode">
         <button class="btn" data-m="free" aria-pressed="true">Try it yourself</button>
         <button class="btn" data-m="auto" aria-pressed="false">Autoplay</button>
-        <button class="btn" data-m="step" aria-pressed="false">Step by step</button>
       </div>
 
       <!-- original canvas on the left; the result frame appears on the right in step mode -->

@@ -266,7 +266,7 @@ new RGBELoader().load("assets/sky_sunset.hdr", (hdr) => {
 scene.add(new THREE.HemisphereLight(0xcfd8ee, 0x7a5a40, 0.14));
 const sun = new THREE.DirectionalLight(0xffc27a, 2.9);
 sun.target.position.set(0, 0, -1); sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 24);
-sun.castShadow = true; sun.shadow.mapSize.set(mobile ? 2048 : 4096, mobile ? 2048 : 4096); sun.shadow.bias = -0.0002; sun.shadow.normalBias = 0.03;
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0002; sun.shadow.normalBias = 0.03;
 Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 8, bottom: -8, near: 1, far: 45 });
 scene.add(sun, sun.target);
 const lamp = new THREE.PointLight(0xffb468, 14, 9, 2); lamp.position.set(3.1, 2.7, -2.0); scene.add(lamp);
@@ -579,7 +579,7 @@ const look = { yaw: 0, pitch: 0, ty: 0, tp: 0 };      // drag to look around, al
 
 // ---------- 7. THE GAME FLOW ----------
 let stage = "title";                                  // title, pickPainting, pickTool, moving, lab
-let easelPainting = null, heldTool = null, liveTexture = null, showingLive = false, lastVersion = -1;
+let easelPainting = null, heldTool = null, liveTexture = null, showingLive = false, lastVersion = -1, toolFollow = false;
 const hud = $("hud");
 let hudDefault = "";
 function setStage(s, text) { stage = s; hudDefault = text || ""; hud.hidden = !text; $("hudText").textContent = hudDefault; }
@@ -628,14 +628,17 @@ function openLab() {
   liveTexture = new THREE.CanvasTexture(Lab.canvas);
   liveTexture.colorSpace = THREE.SRGBColorSpace; liveTexture.anisotropy = 8;
   showingLive = false; lastVersion = -1;
-  heldTool.visible = false;                            // in the lab the cursor is the tool: nothing blocks the painting
+  scene.attach(heldTool);                              // the tool leaves the camera and goes to the painting
+  toolFollow = true;
+  if (gtao) gtao.enabled = false;                      // ambient occlusion is the most expensive effect: off while painting, so it stays smooth
   canvasEl.style.cursor = "default";
   setStage("lab");
 }
 
 function closeLab(paintingToo) {
   setStage("moving");
-  labPtr.down = false; labPtr.over = false;
+  toolFollow = false; labPtr.down = false; labPtr.over = false; labPtr.client = null; canvasEl.style.cursor = "default";
+  if (gtao && quality === 2) gtao.enabled = true;
   Lab.close();
   $("lab").hidden = true;
   const pl = easelPainting.userData.plane;
@@ -687,31 +690,31 @@ function hover(obj) {                                 // a warm glow on whatever
   canvasEl.style.cursor = obj ? "pointer" : "grab";
 }
 
-// In the lab the cursor is the tool: pressing and dragging over the painting works it
-const labPtr = { over: false, down: false, point: new THREE.Vector3(), tile: null };
-function paintingHit(e) {
+// In the lab the cursor is the tool. The pointer events only remember where the cursor is; everything else (finding the spot on
+// the painting, painting, moving the tool) happens once per frame, so it stays smooth however fast the mouse reports.
+const labPtr = { client: null, over: false, down: false, point: new THREE.Vector3(), dir: new THREE.Vector3(), last: null };
+const _ndc = new THREE.Vector2();
+function labUpdatePointer() {
+  if (!labPtr.client) return;
   const r = canvasEl.getBoundingClientRect();
-  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  return raycaster.intersectObject(easelPainting.userData.plane)[0] || null;
-}
-function labPointer(e, type) {
-  const hit = paintingHit(e);
+  _ndc.set(((labPtr.client.x - r.left) / r.width) * 2 - 1, -((labPtr.client.y - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(_ndc, camera);
+  const hit = raycaster.intersectObject(easelPainting.userData.plane)[0];
   labPtr.over = !!hit;
-  if (type === "up") { labPtr.down = false; labPtr.tile = null; return; }
-  if (!hit) return;
-  labPtr.point.copy(hit.point);
-  const g = Lab.grid, tx = Math.min(g.cols - 1, Math.floor(hit.uv.x * g.cols)), ty = Math.min(g.rows - 1, Math.floor((1 - hit.uv.y) * g.rows));
-  if (type === "down") { labPtr.down = true; labPtr.tile = null; }
-  if (labPtr.down && Lab.mode === "free") {
-    const from = labPtr.tile || [tx, ty], n = Math.max(Math.abs(tx - from[0]), Math.abs(ty - from[1]), 1);
-    for (let k = 1; k <= n; k++) Lab.touch(Math.round(from[0] + ((tx - from[0]) * k) / n), Math.round(from[1] + ((ty - from[1]) * k) / n));   // no gaps when the cursor moves fast
-    labPtr.tile = [tx, ty];
+  if (hit) {
+    labPtr.point.copy(hit.point); labPtr.dir.copy(raycaster.ray.direction);
+    const u = hit.uv.x, v = 1 - hit.uv.y;               // where on the picture the cursor is (v counted from the top)
+    if (labPtr.down && Lab.mode === "free") { const from = labPtr.last || [u, v]; Lab.stroke(from[0], from[1], u, v); labPtr.last = [u, v]; }
+    else if (!labPtr.down) labPtr.last = null;
   }
+  const want = labPtr.over && Lab.mode === "free" ? "none" : "default";      // the tool takes the cursor's place over the painting
+  if (canvasEl.style.cursor !== want) canvasEl.style.cursor = want;
 }
+const labPointerAt = (e) => { labPtr.client = { x: e.clientX, y: e.clientY }; };
 
-canvasEl.addEventListener("pointerdown", (e) => { if (stage === "lab") { canvasEl.setPointerCapture(e.pointerId); labPointer(e, "down"); return; } dragging = true; moved = 0; last = [e.clientX, e.clientY]; canvasEl.setPointerCapture(e.pointerId); });
+canvasEl.addEventListener("pointerdown", (e) => { if (stage === "lab") { canvasEl.setPointerCapture(e.pointerId); labPointerAt(e); labPtr.down = true; labPtr.last = null; return; } dragging = true; moved = 0; last = [e.clientX, e.clientY]; canvasEl.setPointerCapture(e.pointerId); });
 canvasEl.addEventListener("pointermove", (e) => {
-  if (stage === "lab") { labPointer(e, "move"); return; }
+  if (stage === "lab") { labPointerAt(e); return; }
   if (dragging) {
     const dx = e.clientX - last[0], dy = e.clientY - last[1];
     moved += Math.abs(dx) + Math.abs(dy); last = [e.clientX, e.clientY];
@@ -721,7 +724,7 @@ canvasEl.addEventListener("pointermove", (e) => {
   } else hover(pick(e));
 });
 canvasEl.addEventListener("pointerup", (e) => {
-  if (stage === "lab") { labPointer(e, "up"); return; }
+  if (stage === "lab") { labPointerAt(e); labPtr.down = false; labPtr.last = null; return; }
   dragging = false;
   if (moved > 6) return;                              // it was a drag, not a click
   const o = pick(e);
@@ -732,6 +735,31 @@ canvasEl.addEventListener("pointerup", (e) => {
 
 // ---------- 9. THE LOOP ----------
 const clock = new THREE.Clock();
+
+// ---------- THE TOOL ON THE PAINTING ----------
+// pivot = the point of the tool that touches the painting (in the tool's own coordinates), tilt = how far it leans, spin = how it is turned
+const TOOL_POSE = {
+  sponge: { pivot: [0, 0, 0],       tilt: 0,   spin: 15 },
+  knife:  { pivot: [0.12, 0.03, 0], tilt: 0.3, spin: 140 },
+  chalk:  { pivot: [0.085, 0, 0],   tilt: 0.5, spin: 125 },
+};
+const _AX = new THREE.Vector3(1, 0, 0), _AZ = new THREE.Vector3(0, 0, 1);
+const _p = new THREE.Vector3(), _tp = new THREE.Vector3(), _tq = new THREE.Quaternion(), _wq = new THREE.Quaternion(), _pv = new THREE.Vector3(), _nv = new THREE.Vector3();
+const toolQuat = (key) => {                        // flat side towards the canvas, turned and tilted
+  const c = TOOL_POSE[key];
+  return new THREE.Quaternion().setFromAxisAngle(_AZ, THREE.MathUtils.degToRad(c.spin))
+    .multiply(new THREE.Quaternion().setFromAxisAngle(_AX, Math.PI / 2))
+    .multiply(new THREE.Quaternion().setFromAxisAngle(_AZ, -c.tilt));
+};
+// a point of the picture (u across, v down, both 0 to 1) in the 3D room
+function uvWorld(u, v, out) { const d = easelPainting.userData; return d.plane.localToWorld(out.set((u - 0.5) * d.w, (0.5 - v) * d.h, 0)); }
+// the pose of the tool when its working point is on P, lifted off the painting by `lift`
+function toolPose(key, P, lift, outPos, outQuat) {
+  easelPainting.getWorldQuaternion(_wq);
+  outQuat.copy(_wq).multiply(toolQuat(key));
+  _nv.set(0, 0, 1).applyQuaternion(_wq);
+  outPos.copy(P).addScaledVector(_nv, lift).sub(_pv.set(...TOOL_POSE[key].pivot).applyQuaternion(outQuat));
+}
 
 // ---------- 7. THE LOOK: ambient occlusion, bloom, film grading ----------
 // Ambient occlusion darkens the corners and contact points where light can't reach, which is what makes a room feel solid.
@@ -813,6 +841,18 @@ function frame() {
       plane.material.map = showingLive ? liveTexture : easelPainting.userData.staticMap; plane.material.needsUpdate = true; lastVersion = -1;
     }
     if (showingLive && Lab.info.version !== lastVersion) { lastVersion = Lab.info.version; liveTexture.needsUpdate = true; }
+  }
+  if (stage === "lab" && toolFollow && heldTool) {
+    labUpdatePointer();
+    const cur = Lab.cursor;
+    let lift;
+    if (cur.active) { const g = Lab.grid; uvWorld((cur.x + 0.5) / g.cols, (cur.y + 0.5) / g.rows, _p); lift = 0.004; }      // autoplay: the tool slides over the art
+    else if (labPtr.over && Lab.mode === "free") { _p.copy(labPtr.point).addScaledVector(labPtr.dir, labPtr.down ? -0.004 : -0.06); lift = 0; }   // by hand: exactly under the cursor (moved along the line of sight, so it never seems to drift), pressed down when you press
+    else { uvWorld(0.7, 0.84, _p); lift = 0.14; }                                                                        // resting just above the painting
+    toolPose(heldTool.userData.key, _p, lift, _tp, _tq);
+    const follow = labPtr.over && Lab.mode === "free" && !cur.active;
+    const k = follow ? 1 - Math.exp(-60 * dt) : 1 - Math.exp(-12 * dt);          // by hand it is glued to the cursor; otherwise it glides
+    heldTool.position.lerp(_tp, k); heldTool.quaternion.slerp(_tq, k);
   }
   if (quality > 0 && composer) { grade.uniforms.uTime.value = (performance.now() % 100000) / 1000; grade.uniforms.uAspect.value = camera.aspect; composer.render(dt); }
   else renderer.render(scene, camera);

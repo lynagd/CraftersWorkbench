@@ -7,8 +7,15 @@
 
 (() => {
   // ---------- 1. SETTINGS AND TEXTS ----------
-  const TILE = 40;          // size of one tile on the canvas, in pixels (CSS scales the canvas). Big enough to keep the real picture sharp
+  const TILE = 40;          // size of a tile on the canvas while the real picture is still loading
   const RUN_TIME = 7500;    // total duration of one autoplay run, in milliseconds
+  const MAX_SIDE = 1024;    // the picture is worked on at no more than this many pixels along its longest side
+  const BRUSH = 1.5;        // how far the tool reaches, in tiles from its centre (so it covers about 3 x 3 tiles)
+  // The size of one "cell" of each tool's 3 x 3 kernel, in pixels of the picture (measured on a 736 px wide picture).
+  // The kernel is the same 3 x 3 grid of weights as in convolution.js; here each cell is as big as a few stones of the mosaic.
+  const SCALE = { sponge: 10, knife: 3, chalk: 5 };
+  const KNIFE_AMOUNT = 1.6, CHALK_GAIN = 2.0, CHALK_THRESHOLD = 24;
+  const SLATE = [24, 27, 52], CHALK = [244, 228, 200];
 
   const TEXT = {
     sponge: {
@@ -48,8 +55,7 @@
     stepIndex: 0,        // step mode: how many tiles have been done
     inspect: null,       // the tile shown in the detail card: { x, y }
     photo: null,         // the real picture (loaded image), shown until the tool changes a tile
-    painted: [],         // by hand: new colour of every tile the tool has touched
-    paintedCount: 0,
+    touched: false,      // by hand: the tool has touched the painting
     showOriginal: false, // true while "Hold to see the original" is pressed
     runTimer: null,
     startTimer: null
@@ -59,45 +65,69 @@
   const cursor = { x: 0, y: 0, active: false };   // active: the lab (autoplay or step) is moving the tool
   const info = { dirty: false, version: 0 };      // dirty: some tiles are changed, so the painting must show the live canvas
 
-  // ---------- 3. DRAWING ----------
-  // [r, g, b] with values from 0 to 1  ->  "rgb(255, 0, 0)"
-  function css(color) {
-    return "rgb(" + color.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(",") + ")";
+  // ---------- 3. DRAWING: the real picture, the real convolution, and a soft brush ----------
+  // The tool is applied to the real pixels of the mosaic (section 4), so the picture is never turned into blocks.
+  // Where the tool passes, a soft round brush fades the convolved picture in over the original.
+  const make = () => { const c = document.createElement("canvas"); return [c, c.getContext("2d")]; };
+  const [maskC, mctx] = make();      // where the tool has passed (the alpha channel), on the main canvas
+  const [mask2C, m2ctx] = make();    // the same for the result canvas in step mode
+  const [layerC, lctx] = make();     // scratch: the convolved picture cut out by a mask
+  const [resC, rctx] = make();       // the whole picture convolved by the current tool
+  let ready = false;                 // true once the picture is loaded and convolved
+
+  function setSize(w, h) {
+    [canvas, canvasOut, maskC, mask2C, layerC, resC].forEach((c) => { c.width = w; c.height = h; });
   }
+  const fullRect = () => ({ x: 0, y: 0, w: canvas.width, h: canvas.height });
+  const tileW = () => canvas.width / state.image.cols, tileH = () => canvas.height / state.image.rows;
 
   function updateDirty() {
-    info.dirty = (state.mode === "auto" && state.revealed > 0) || (state.mode === "free" && state.paintedCount > 0);
+    info.dirty = ready && ((state.mode === "auto" && state.revealed > 0) || (state.mode === "free" && state.touched));
     info.version++;
   }
 
-  // The new colour of tile i, or null when the tile is still the untouched picture
-  function changedColor(i) {
-    if (state.showOriginal) return null;
-    if (state.mode === "auto" && i < state.revealed) return state.result[i];
-    if (state.mode === "free" && state.painted[i]) return state.painted[i];
-    return null;                         // step mode: the left canvas always stays original
+  function drawBase(c, r) {
+    if (state.photo) c.drawImage(state.photo, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+    else { c.fillStyle = "#14162b"; c.fillRect(r.x, r.y, r.w, r.h); }
   }
 
-  // Original canvas. Untouched tiles show the real picture; touched tiles show the tool's result.
-  function drawTile(i) {
-    const { cols, pixels } = state.image;
-    const x = (i % cols) * TILE, y = Math.floor(i / cols) * TILE, col = changedColor(i);
-    if (col) { ctx.fillStyle = css(col); ctx.fillRect(x, y, TILE, TILE); }
-    else if (state.photo) {
-      const sw = state.photo.naturalWidth / cols, sh = state.photo.naturalHeight / state.image.rows;
-      ctx.drawImage(state.photo, (i % cols) * sw, Math.floor(i / cols) * sh, sw, sh, x, y, TILE, TILE);
-    } else { ctx.fillStyle = css(pixels[i]); ctx.fillRect(x, y, TILE, TILE); }
+  // Cut the convolved picture out with a mask and put it on the target (over the original picture, if withBase)
+  function composite(mask, target, r, withBase) {
+    lctx.globalCompositeOperation = "source-over";
+    lctx.clearRect(r.x, r.y, r.w, r.h);
+    lctx.drawImage(resC, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+    lctx.globalCompositeOperation = "destination-in";
+    lctx.drawImage(mask, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+    lctx.globalCompositeOperation = "source-over";
+    target.clearRect(r.x, r.y, r.w, r.h);
+    if (withBase) drawBase(target, r);
+    target.drawImage(layerC, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
     info.version++;
   }
+
+  // Main canvas: the original picture, with the tool's result where the tool has passed
+  function refreshMain(r) {
+    if (state.showOriginal || state.mode === "step" || !ready) { ctx.clearRect(r.x, r.y, r.w, r.h); drawBase(ctx, r); info.version++; }
+    else composite(maskC, ctx, r, true);
+  }
+  const refreshOut = (r) => { if (ready) composite(mask2C, ctxOut, r, false); };   // step mode: only the part that has been done
 
   function drawAll() {
-    if (state.photo) ctx.drawImage(state.photo, 0, 0, canvas.width, canvas.height);   // the whole picture, smooth
-    for (let i = 0; i < state.image.pixels.length; i++) {
-      if (state.photo && !changedColor(i)) continue;
-      drawTile(i);
-    }
+    refreshMain(fullRect());
     updateDirty();
   }
+
+  // Put one soft, round dab of the brush on a mask at pixel (x, y). Returns the part of the canvas that changed.
+  function stamp(m, x, y) {
+    const r = BRUSH * tileW();
+    const g = m.createRadialGradient(x, y, r * 0.45, x, y, r);
+    g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(1, "rgba(255,255,255,0)");
+    m.fillStyle = g; m.fillRect(x - r, y - r, 2 * r, 2 * r);
+    const x0 = Math.max(0, Math.floor(x - r) - 1), y0 = Math.max(0, Math.floor(y - r) - 1);
+    const x1 = Math.min(canvas.width, Math.ceil(x + r) + 1), y1 = Math.min(canvas.height, Math.ceil(y + r) + 1);
+    return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+  }
+  const clearMasks = () => { mctx.clearRect(0, 0, maskC.width, maskC.height); m2ctx.clearRect(0, 0, mask2C.width, mask2C.height); };
 
   // Scale the canvas (or the two canvases) to fit the lab panel, keeping the pattern's proportions
   function fitCanvas() {
@@ -126,7 +156,65 @@
   const moveFrame = (x, y) => { cursor.x = x; cursor.y = y; cursor.active = true; placeBox(frame, x - 1, y - 1, 3, 3); }; // step mode: outline of the 9 tiles
   const moveMark = (x, y) => placeBox(mark, x, y, 1, 1);           // the newest tile on the result
 
-  // ---------- 4. SHARED HELPERS ----------
+  // ---------- 4. THE REAL CONVOLUTION ON THE REAL PICTURE ----------
+  // Each tool is its 3 x 3 kernel from convolution.js, but every cell of the kernel is a small patch of the mosaic
+  // (an average over `s` pixels) and the cells are `s` pixels apart. So the sponge really blurs the stones,
+  // the knife really sharpens their edges, and the chalk really finds the lines between them.
+  function boxMean(src, W, H, s) {          // average over an s x s square around every pixel (edges use what is there)
+    const lo = -(s >> 1), hi = lo + s - 1, tmp = new Float32Array(W * H), out = new Float32Array(W * H);
+    const P = new Float64Array(Math.max(W, H) + 1);
+    for (let y = 0; y < H; y++) {
+      const row = y * W;
+      for (let x = 0; x < W; x++) P[x + 1] = P[x] + src[row + x];
+      for (let x = 0; x < W; x++) { const a = Math.max(0, x + lo), b = Math.min(W - 1, x + hi); tmp[row + x] = (P[b + 1] - P[a]) / (b - a + 1); }
+    }
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < H; y++) P[y + 1] = P[y] + tmp[y * W + x];
+      for (let y = 0; y < H; y++) { const a = Math.max(0, y + lo), b = Math.min(H - 1, y + hi); out[y * W + x] = (P[b + 1] - P[a]) / (b - a + 1); }
+    }
+    return out;
+  }
+
+  function buildResult() {
+    ready = false;
+    const photo = state.photo, W = photo.width, H = photo.height;
+    const [tc, tctx] = make(); tc.width = W; tc.height = H; tctx.drawImage(photo, 0, 0);
+    const data = tctx.getImageData(0, 0, W, H).data, N = W * H;
+    const src = [0, 1, 2].map((c) => { const a = new Float32Array(N); for (let i = 0; i < N; i++) a[i] = data[i * 4 + c]; return a; });
+    const s = Math.max(1, Math.round(SCALE[state.tool] * W / 736));
+    const A = src.map((a) => boxMean(a, W, H, s));
+    const w = Convolution.KERNELS[state.tool].weights;
+    const clampX = (x) => (x < 0 ? 0 : x >= W ? W - 1 : x), clampY = (y) => (y < 0 ? 0 : y >= H ? H - 1 : y);
+    const K = [0, 1, 2].map((c) => {                                  // the 3 x 3 kernel applied to the patches
+      const acc = new Float32Array(N);
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const wt = w[(j + 1) * 3 + (i + 1)]; if (wt === 0) continue;
+        for (let y = 0; y < H; y++) { const yy = clampY(y + j * s) * W; for (let x = 0; x < W; x++) acc[y * W + x] += wt * A[c][yy + clampX(x + i * s)]; }
+      }
+      return acc;
+    });
+    const out = rctx.createImageData(W, H), o = out.data;
+    for (let i = 0; i < N; i++) {
+      if (state.tool === "sponge") for (let c = 0; c < 3; c++) o[i * 4 + c] = K[c][i];
+      else if (state.tool === "knife") for (let c = 0; c < 3; c++) o[i * 4 + c] = src[c][i] + KNIFE_AMOUNT * (K[c][i] - A[c][i]);   // the picture plus the kernel's extra contrast
+      else {
+        const lum = Math.abs(0.299 * K[0][i] + 0.587 * K[1][i] + 0.114 * K[2][i]);
+        const v = Math.max(0, Math.min(1, ((lum - CHALK_THRESHOLD) / 255) * CHALK_GAIN));   // line strength: dark slate, chalk line where colours meet
+        for (let c = 0; c < 3; c++) o[i * 4 + c] = SLATE[c] * (1 - v) + CHALK[c] * v;
+      }
+      o[i * 4 + 3] = 255;
+    }
+    resC.width = W; resC.height = H;
+    rctx.putImageData(out, 0, 0);
+    ready = true;
+  }
+
+  // ---------- 5. SHARED HELPERS ----------
+  // [r, g, b] with values from 0 to 1  ->  "rgb(255, 0, 0)" (used by the detail card)
+  function css(color) {
+    return "rgb(" + color.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(",") + ")";
+  }
+
   function stopAnimation() {
     clearInterval(state.runTimer);
     clearTimeout(state.startTimer);
@@ -153,12 +241,10 @@
     state.revealed = 0;
     state.stepIndex = 0;
     state.showOriginal = false;
-    state.painted = []; state.paintedCount = 0;
+    state.touched = false;
     cursor.active = false;
-    [canvas, canvasOut].forEach((c) => {
-      c.width = state.image.cols * TILE;
-      c.height = state.image.rows * TILE;
-    });
+    if (!state.photo) setSize(state.image.cols * TILE, state.image.rows * TILE);   // until the real picture is loaded
+    clearMasks();
     frame.hidden = true;
     mark.hidden = true;
     fitCanvas();
@@ -206,31 +292,34 @@
     stopAnimation();
     frame.hidden = true;
     cursor.active = false;                // the tool lifts off the painting
+    mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, maskC.width, maskC.height); drawAll();   // make sure every last pixel is done
     $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
     state.inspect = null; // the card will explain the middle tile
     setMoreLabel(false);
     $("more").hidden = false;
   }
 
-  // Slide the tool over every tile, row by row, changing each tile in place
+  // Slide the tool over the painting, row by row: wherever it passes, the picture is changed by the real convolution
   function play() {
     stopAnimation();
     resetMessages();
     state.showOriginal = false;
     state.revealed = 0;
-    state.painted = []; state.paintedCount = 0;
+    state.touched = false;
+    clearMasks();
     frame.hidden = true;                  // no glowing frame: the tool itself slides over the painting
-    state.result = Convolution.applyAll(state.image, state.tool); // all results computed first
     drawAll();
+    if (!ready) { state.startTimer = setTimeout(play, 150); return; }   // wait for the picture to be ready
 
     const total = state.image.pixels.length;
     const cols = state.image.cols;
     let i = 0;
     state.runTimer = setInterval(() => {
-      cursor.x = i % cols; cursor.y = Math.floor(i / cols); cursor.active = true;
+      const x = i % cols, y = Math.floor(i / cols);
+      cursor.x = x; cursor.y = y; cursor.active = true;
       i++;
       state.revealed = i;
-      drawTile(i - 1);
+      refreshMain(stamp(mctx, (x + 0.5) * tileW(), (y + 0.5) * tileH()));
       info.dirty = true;
       if (i >= total) finishRun();
     }, Math.max(8, RUN_TIME / total));
@@ -244,6 +333,7 @@
     frame.hidden = true;
     mark.hidden = true;
     cursor.active = false;
+    clearMasks();
     ctxOut.clearRect(0, 0, canvasOut.width, canvasOut.height);
     drawAll();
     $("next").disabled = false;
@@ -259,8 +349,7 @@
 
     moveFrame(x, y);
     moveMark(x, y);
-    ctxOut.fillStyle = css(Convolution.applyAt(state.image, state.tool, x, y));
-    ctxOut.fillRect(x * TILE, y * TILE, TILE, TILE);
+    refreshOut(stamp(m2ctx, (x + 0.5) * tileW(), (y + 0.5) * tileH()));   // the result appears, softly, on the right
 
     state.stepIndex = i + 1;
     state.inspect = { x, y };
@@ -281,39 +370,53 @@
   function resetFree() {
     stopAnimation();
     resetMessages();
-    state.painted = []; state.paintedCount = 0;
+    state.touched = false;
     state.showOriginal = false;
     state.revealed = 0;
     cursor.active = false;
     frame.hidden = true;
     mark.hidden = true;
+    clearMasks();
     drawAll();
     $("fin").textContent = FREE_HINT;
   }
 
-  // Called by the game each time the tool touches the painting at tile (x, y): the 9 tiles under it change
-  function touch(x, y) {
-    if (state.mode !== "free" || !state.image || state.showOriginal) return;
+  // The tool touches the painting at (u, v), both from 0 to 1 across the picture (v from the top): the real convolution
+  // appears under it, with a soft edge. A stroke does all its dabs first and redraws the changed area once.
+  const union = (a, b) => { if (!a) return b; const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x + a.w, b.x + b.w), y1 = Math.max(a.y + a.h, b.y + b.h); return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }; };
+  function afterPainting(x, y) {
+    const first = !state.touched;
+    state.touched = true;
     const { cols, rows } = state.image;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const tx = x + dx, ty = y + dy;
-        if (tx < 0 || ty < 0 || tx >= cols || ty >= rows) continue;
-        const i = ty * cols + tx;
-        if (state.painted[i]) continue;
-        state.painted[i] = Convolution.applyAt(state.image, state.tool, tx, ty);   // always computed from the original tiles
-        state.paintedCount++;
-        drawTile(i);
-      }
+    state.inspect = { x: Math.max(0, Math.min(cols - 1, Math.floor(x / tileW()))), y: Math.max(0, Math.min(rows - 1, Math.floor(y / tileH()))) };
+    if (first) {
+      setMoreLabel(false); $("more").hidden = false;
+      $("fin").textContent = "Wherever the tool touches, the picture is recalculated from the pixels around it.";
     }
-    state.inspect = { x: Math.max(0, Math.min(cols - 1, x)), y: Math.max(0, Math.min(rows - 1, y)) };
-    if ($("more").hidden) { setMoreLabel(false); $("more").hidden = false; }
     if (!$("real").hidden) fillDetail();
-    $("fin").textContent = state.paintedCount >= cols * rows
-      ? TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time."
-      : "Every tile you touch is mixed from the 9 tiles under the tool.";
     updateDirty();
   }
+  const canPaint = () => state.mode === "free" && ready && !state.showOriginal;
+  function touchUV(u, v) {
+    if (!canPaint()) return;
+    const x = u * canvas.width, y = v * canvas.height;
+    refreshMain(stamp(mctx, x, y));
+    afterPainting(x, y);
+  }
+  // a smooth stroke from one point to the next, so fast movements leave no gaps
+  function stroke(u0, v0, u1, v1) {
+    if (!canPaint()) return;
+    const dx = (u1 - u0) * canvas.width, dy = (v1 - v0) * canvas.height;
+    const n = Math.min(80, Math.max(1, Math.ceil(Math.hypot(dx, dy) / (BRUSH * tileW() * 0.3))));
+    let rect = null, x = 0, y = 0;
+    for (let k = 1; k <= n; k++) {
+      x = (u0 + ((u1 - u0) * k) / n) * canvas.width; y = (v0 + ((v1 - v0) * k) / n) * canvas.height;
+      rect = union(rect, stamp(mctx, x, y));
+    }
+    refreshMain(rect);
+    afterPainting(x, y);
+  }
+  const touch = (x, y) => touchUV((x + 0.5) / state.image.cols, (y + 0.5) / state.image.rows);   // by tile, kept for older code
 
   function setMode(mode) {
     state.mode = mode;
@@ -333,7 +436,7 @@
     fitCanvas();
     if (step) resetStep();
     else if (mode === "free") resetFree();
-    else { state.revealed = 0; state.painted = []; state.paintedCount = 0; drawAll(); play(); }
+    else { state.revealed = 0; state.touched = false; clearMasks(); drawAll(); play(); }
   }
 
   // ---------- 9. BUTTONS ----------
@@ -372,9 +475,20 @@
   function open(tool, pattern, photoUrl) {
     state.tool = tool;
     state.photo = null;
-    if (photoUrl) {                       // the real picture replaces the flat tiles as soon as it is loaded
+    ready = false;
+    if (photoUrl) {                       // the real picture, convolved by the tool, as soon as it is loaded
       const img = new Image();
-      img.onload = () => { if (state.pattern === pattern) { state.photo = img; drawAll(); } };
+      img.onload = () => {
+        if (state.pattern !== pattern || state.tool !== tool) return;
+        const k = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));   // work at a size every computer handles smoothly
+        const [wc, wctx] = make(); wc.width = Math.round(img.naturalWidth * k); wc.height = Math.round(img.naturalHeight * k);
+        wctx.drawImage(img, 0, 0, wc.width, wc.height);
+        state.photo = wc;
+        setSize(wc.width, wc.height);
+        clearMasks();
+        buildResult();
+        if (state.mode === "step") resetStep(); else drawAll();
+      };
       img.src = photoUrl;
     }
     $("tName").textContent = Convolution.KERNELS[tool].name;
@@ -388,7 +502,7 @@
 
   // canvas = the live picture; cursor = where the tool should be; info = has the picture changed;
   // touch = the tool touched the painting (by hand). The game mirrors all of this in 3D.
-  window.Lab = { open, close, canvas, frame, cursor, info, touch,
+  window.Lab = { open, close, canvas, frame, cursor, info, touch, touchUV, stroke,
     get mode() { return state.mode; },
     get grid() { return { cols: state.image.cols, rows: state.image.rows }; } };
 })();
