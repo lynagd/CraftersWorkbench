@@ -293,7 +293,7 @@
     frame.hidden = true;
     cursor.active = false;                // the tool lifts off the painting
     mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, maskC.width, maskC.height); drawAll();   // make sure every last pixel is done
-    $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
+    $("fin").textContent = TEXT[state.tool].done + " This is called convolution.";
     state.inspect = null; // the card will explain the middle tile
     setMoreLabel(false);
     $("more").hidden = false;
@@ -361,7 +361,7 @@
       frame.hidden = true;
       cursor.active = false;
       $("next").disabled = true;
-      $("fin").textContent = TEXT[state.tool].done + " This is called convolution. Your phone camera does it all the time.";
+      $("fin").textContent = TEXT[state.tool].done + " This is called convolution.";
     }
   }
 
