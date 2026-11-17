@@ -160,3 +160,37 @@ body.game::after { content: ""; position: fixed; inset: 0; pointer-events: none;
 .intro, .hud, .lab { z-index: 2; }
 /* in the workshop the tool itself works on the painting, so the panel only draws a plain outline (no glow) */
 .lab .win, .lab .mark { box-shadow: none; outline: 3px solid var(--gold); outline-offset: -1px; }
+
+/* 7. "?" HELP BUTTON, ACTIONS AND NAVIGATION LINKS */
+.finrow { display: flex; align-items: center; justify-content: center; gap: 10px; max-width: 46ch; }
+
+.help {
+  position: relative; flex: none; width: 32px; height: 32px; padding: 0;
+  border-radius: 50%; border: 3px solid var(--org);
+  background: transparent; color: var(--org);
+  font: 700 17px/1 Kufam, serif; cursor: pointer;
+}
+.help:hover, .help[aria-expanded="true"] { background: var(--org); color: var(--ink); }
+.help:focus-visible { outline: 3px solid var(--slate); outline-offset: 2px; }
+.help::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); right: 0;
+  white-space: nowrap; background: var(--card); color: var(--cfg);
+  border: 2px solid var(--org); border-radius: 4px; padding: 4px 10px;
+  font: 600 13px Cairo, sans-serif;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.help:hover::after, .help:focus-visible::after { opacity: 1; }
+.help.pulse { animation: helpPulse 1.2s ease-out 1; }
+@keyframes helpPulse { from { box-shadow: 0 0 0 0 var(--org); } to { box-shadow: 0 0 0 14px transparent; } }
+
+/* Replay and Hold to see the original */
+.actions .btn { font-size: 16px; padding: 10px 22px; }
+
+/* the two text links at the bottom */
+.nav {
+  display: flex; justify-content: space-between; gap: 12px; width: 100%;
+  border-top: 1px solid rgba(128, 128, 128, .35); padding-top: 16px; margin-top: 4px;
+}
+.link { font: inherit; font-size: 15px; background: none; border: 0; padding: 4px 0; color: var(--mut); cursor: pointer; }
+.link:hover, .link:focus-visible { color: var(--org); outline: none; }
+
